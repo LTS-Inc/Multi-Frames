@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1
-=================
+Multi-Frames v1.1.2
+===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
 
@@ -25,6 +25,23 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.2 (2025-01-25)
+        - Comprehensive mobile optimization (touch targets, layouts)
+        - Added safe-area-insets for notched phones
+        - Admin tabs now show icons-only on small screens
+        - Login rate limiting (5 attempts, 15 min lockout)
+        - Timing-attack resistant password comparison
+        - Improved error handling throughout
+        - Better touch feedback on buttons
+        - Reduced motion support for accessibility
+        - Print styles added
+
+    v1.1.1 (2025-01-25)
+        - Fixed config file permission error (now shows friendly message)
+        - Branding uploads handle save errors gracefully
+        - Added warning banner when config not writable
+        - Added fix instructions in System tab
+
     v1.1.0 (2025-01-25)
         - Added configuration import/upload feature
         - Added "preserve users" option for config import
@@ -88,7 +105,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.0"
+VERSION = "1.1.2"
 VERSION_DATE = "2025-01-25"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -309,7 +326,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1 by LTS, Inc.",
+            "text": "Multi-Frames v1.1.2 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -945,6 +962,45 @@ def apply_network_config(config, network_settings):
 # In-memory session storage
 sessions = {}
 
+# Login rate limiting
+failed_login_attempts = {}  # IP -> {'count': int, 'lockout_until': datetime}
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_LOCKOUT_MINUTES = 15
+
+def check_login_allowed(client_ip):
+    """Check if login attempts are allowed from this IP."""
+    if client_ip not in failed_login_attempts:
+        return True, None
+    
+    attempt_data = failed_login_attempts[client_ip]
+    lockout_until = attempt_data.get('lockout_until')
+    
+    if lockout_until and datetime.now() < lockout_until:
+        remaining = (lockout_until - datetime.now()).seconds // 60 + 1
+        return False, f"Too many failed attempts. Try again in {remaining} minute(s)."
+    
+    # Lockout expired, reset
+    if lockout_until and datetime.now() >= lockout_until:
+        del failed_login_attempts[client_ip]
+    
+    return True, None
+
+def record_failed_login(client_ip):
+    """Record a failed login attempt."""
+    if client_ip not in failed_login_attempts:
+        failed_login_attempts[client_ip] = {'count': 0, 'lockout_until': None}
+    
+    failed_login_attempts[client_ip]['count'] += 1
+    
+    if failed_login_attempts[client_ip]['count'] >= MAX_LOGIN_ATTEMPTS:
+        failed_login_attempts[client_ip]['lockout_until'] = datetime.now() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+        server_logger.warning(f"IP {client_ip} locked out after {MAX_LOGIN_ATTEMPTS} failed login attempts")
+
+def clear_failed_logins(client_ip):
+    """Clear failed login attempts after successful login."""
+    if client_ip in failed_login_attempts:
+        del failed_login_attempts[client_ip]
+
 # =============================================================================
 # Utility Functions
 # =============================================================================
@@ -961,9 +1017,47 @@ def load_config():
     return DEFAULT_CONFIG.copy()
 
 def save_config(config):
-    """Save configuration to JSON file."""
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
+    """
+    Save configuration to JSON file.
+    Returns tuple: (success: bool, error_message: str or None)
+    For backward compatibility, also works if return value is ignored.
+    """
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+        return True, None
+    except PermissionError:
+        error_msg = f"Permission denied: Cannot write to '{CONFIG_FILE}'. Check file permissions or run: chmod 666 {CONFIG_FILE}"
+        server_logger.error(error_msg)
+        return False, error_msg
+    except IOError as e:
+        error_msg = f"IO Error saving config: {str(e)}"
+        server_logger.error(error_msg)
+        return False, error_msg
+    except Exception as e:
+        error_msg = f"Error saving config: {str(e)}"
+        server_logger.error(error_msg)
+        return False, error_msg
+
+def save_config_safe(config):
+    """
+    Save configuration, returning error message or None on success.
+    Use this when you want to show error to user.
+    """
+    success, error = save_config(config)
+    return error
+
+def check_config_writable():
+    """Check if config file is writable."""
+    try:
+        # If file exists, check if we can write to it
+        if os.path.exists(CONFIG_FILE):
+            return os.access(CONFIG_FILE, os.W_OK)
+        # If file doesn't exist, check if directory is writable
+        config_dir = os.path.dirname(CONFIG_FILE) or '.'
+        return os.access(config_dir, os.W_OK)
+    except Exception:
+        return False
 
 def hash_password(password):
     """Hash a password using SHA-256."""
@@ -1779,6 +1873,396 @@ footer a:hover {
     color: var(--accent);
     border-bottom-color: var(--accent);
 }
+
+/* ==========================================================================
+   MOBILE OPTIMIZATIONS
+   ========================================================================== */
+
+/* Safe area insets for notched phones */
+@supports (padding: max(0px)) {
+    body {
+        padding-left: max(0px, env(safe-area-inset-left));
+        padding-right: max(0px, env(safe-area-inset-right));
+    }
+    header {
+        padding-left: max(1rem, env(safe-area-inset-left));
+        padding-right: max(1rem, env(safe-area-inset-right));
+    }
+    footer {
+        padding-bottom: max(2rem, env(safe-area-inset-bottom));
+    }
+}
+
+/* Touch-friendly improvements */
+@media (hover: none) and (pointer: coarse) {
+    /* Larger touch targets */
+    .btn, button {
+        min-height: 44px;
+        min-width: 44px;
+    }
+    
+    .btn-sm {
+        min-height: 36px;
+        padding: 0.5rem 1rem;
+    }
+    
+    .btn-icon {
+        width: 36px;
+        height: 36px;
+        font-size: 0.9rem;
+    }
+    
+    input, select, textarea {
+        min-height: 44px;
+        font-size: 16px; /* Prevents zoom on iOS */
+    }
+    
+    input[type="checkbox"], input[type="radio"] {
+        width: 22px;
+        height: 22px;
+        min-height: 22px;
+    }
+    
+    /* Prevent text selection on buttons */
+    button, .btn {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+    }
+    
+    /* Active states for touch feedback */
+    button:active, .btn:active {
+        transform: scale(0.97);
+        opacity: 0.9;
+    }
+    
+    /* Larger clickable areas for links in nav */
+    nav a {
+        padding: 0.6rem 0.8rem;
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+    }
+}
+
+/* Mobile breakpoint styles */
+@media (max-width: 768px) {
+    /* Base font size adjustment */
+    html {
+        font-size: 15px;
+    }
+    
+    /* Container padding */
+    .container {
+        padding: 0 1rem;
+    }
+    
+    /* Header improvements */
+    header .container {
+        padding: 0.75rem 1rem;
+    }
+    
+    header .logo {
+        font-size: 1rem;
+        gap: 0.5rem;
+    }
+    
+    header .logo img {
+        max-height: 28px;
+    }
+    
+    header nav {
+        gap: 0.25rem;
+    }
+    
+    header nav a {
+        padding: 0.5rem 0.6rem;
+        font-size: 0.8rem;
+    }
+    
+    /* Cards and sections */
+    .card {
+        padding: 1.5rem;
+        margin: 2rem auto;
+    }
+    
+    .admin-section h3 {
+        padding: 0.875rem 1rem;
+        font-size: 0.85rem;
+    }
+    
+    .admin-content {
+        padding: 1rem;
+    }
+    
+    /* Admin tabs - horizontal scroll with indicators */
+    .admin-tabs {
+        position: relative;
+        margin-bottom: 1rem;
+    }
+    
+    .admin-tabs::after {
+        content: '';
+        position: absolute;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: 30px;
+        background: linear-gradient(to right, transparent, var(--bg-secondary));
+        pointer-events: none;
+    }
+    
+    .admin-tab {
+        padding: 0.875rem 1rem;
+        font-size: 0.8rem;
+    }
+    
+    .admin-tab-icon {
+        font-size: 1.1rem;
+    }
+    
+    /* Hide tab text on small screens, show icons */
+    .admin-tab-text {
+        display: none;
+    }
+    
+    /* Form improvements */
+    .form-group {
+        margin-bottom: 1.25rem;
+    }
+    
+    label {
+        font-size: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    input, select, textarea {
+        padding: 0.875rem;
+        font-size: 16px;
+    }
+    
+    .inline-form {
+        flex-direction: column;
+    }
+    
+    .inline-form .form-group {
+        width: 100%;
+        min-width: unset;
+    }
+    
+    .inline-form button {
+        width: 100%;
+        margin-top: 0.5rem;
+    }
+    
+    /* Color grid - 2 columns on mobile */
+    .color-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.75rem;
+    }
+    
+    /* Item list improvements */
+    .item-list li {
+        padding: 1rem 0;
+    }
+    
+    .item-list .item-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+    
+    .item-order {
+        flex-direction: row;
+        margin-right: 0;
+        margin-bottom: 0.5rem;
+    }
+    
+    .item-info {
+        width: 100%;
+    }
+    
+    .item-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+    
+    .item-actions .btn {
+        flex: 1;
+        text-align: center;
+    }
+    
+    /* Button groups stack on mobile */
+    .btn-group {
+        flex-direction: column;
+        width: 100%;
+    }
+    
+    .btn-group .btn {
+        width: 100%;
+    }
+    
+    /* Tables become cards on mobile */
+    .info-table {
+        display: block;
+    }
+    
+    .info-table tr {
+        display: flex;
+        flex-direction: column;
+        padding: 0.75rem 0;
+        border-bottom: 1px solid var(--border);
+    }
+    
+    .info-table td:first-child {
+        font-weight: 500;
+        color: var(--text-secondary);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        margin-bottom: 0.25rem;
+    }
+    
+    /* Widget adjustments */
+    .widgets-container {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.75rem;
+    }
+    
+    .widget {
+        padding: 0.75rem;
+    }
+    
+    .widget-clock {
+        font-size: 1.5rem;
+    }
+    
+    .widget-header {
+        font-size: 0.65rem;
+    }
+    
+    /* Command buttons grid */
+    .cmd-btn-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+    }
+    
+    /* Footer */
+    footer {
+        padding: 1.5rem 1rem;
+        font-size: 0.7rem;
+    }
+    
+    /* Edit panel improvements */
+    .edit-panel {
+        padding: 0.875rem;
+    }
+    
+    /* Messages */
+    .message {
+        padding: 0.75rem;
+        font-size: 0.8rem;
+    }
+    
+    /* Preview box */
+    .preview-box {
+        padding: 0.75rem;
+    }
+    
+    .preview-box img {
+        max-height: 50px;
+    }
+    
+    /* Stats grid */
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Extra small screens */
+@media (max-width: 480px) {
+    html {
+        font-size: 14px;
+    }
+    
+    .container {
+        padding: 0 0.75rem;
+    }
+    
+    header .logo span:not(:first-child) {
+        display: none;
+    }
+    
+    .card {
+        padding: 1.25rem;
+        margin: 1.5rem 0.5rem;
+        border-radius: 0.5rem;
+    }
+    
+    .widgets-container {
+        grid-template-columns: 1fr;
+    }
+    
+    .color-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    /* Stack all form buttons */
+    form button, form .btn {
+        width: 100%;
+    }
+    
+    /* Admin tabs - icon only */
+    .admin-tab {
+        padding: 0.75rem;
+    }
+    
+    .admin-tab-icon {
+        font-size: 1.2rem;
+    }
+}
+
+/* Landscape phone */
+@media (max-width: 900px) and (orientation: landscape) {
+    .card {
+        max-width: 500px;
+    }
+    
+    .widgets-container {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+/* Print styles */
+@media print {
+    header, footer, nav, .btn, button, form {
+        display: none !important;
+    }
+    
+    body {
+        background: white;
+        color: black;
+    }
+    
+    .iframe-card {
+        break-inside: avoid;
+    }
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* Dark mode enhancements for OLED screens */
+@media (prefers-color-scheme: dark) {
+    .pure-black {
+        --bg-primary: #000000;
+        --bg-secondary: #0a0a0a;
+    }
+}
 """
 
 def generate_dynamic_styles(config):
@@ -2112,7 +2596,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.2 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -3182,7 +3666,7 @@ def render_widget(widget, config):
                         {btn_label}
                     </button>
                     '''
-        except:
+        except (json.JSONDecodeError, ValueError, TypeError, KeyError):
             buttons_html = '<div class="widget-placeholder">Invalid button configuration</div>'
         
         if not buttons_html:
@@ -4016,29 +4500,29 @@ def render_admin_page(user, config, message=None, error=None):
     </script>
     
     <div class="admin-tabs">
-        <button class="admin-tab active" id="tab-iframes" onclick="switchTab('iframes')">
-            <span class="admin-tab-icon">📺</span> iFrames
+        <button class="admin-tab active" id="tab-iframes" onclick="switchTab('iframes')" title="iFrames">
+            <span class="admin-tab-icon">📺</span><span class="admin-tab-text">iFrames</span>
         </button>
-        <button class="admin-tab" id="tab-widgets" onclick="switchTab('widgets')">
-            <span class="admin-tab-icon">🧩</span> Widgets
+        <button class="admin-tab" id="tab-widgets" onclick="switchTab('widgets')" title="Widgets">
+            <span class="admin-tab-icon">🧩</span><span class="admin-tab-text">Widgets</span>
         </button>
-        <button class="admin-tab" id="tab-appearance" onclick="switchTab('appearance')">
-            <span class="admin-tab-icon">🎨</span> Appearance
+        <button class="admin-tab" id="tab-appearance" onclick="switchTab('appearance')" title="Appearance">
+            <span class="admin-tab-icon">🎨</span><span class="admin-tab-text">Appearance</span>
         </button>
-        <button class="admin-tab" id="tab-branding" onclick="switchTab('branding')">
-            <span class="admin-tab-icon">✨</span> Branding
+        <button class="admin-tab" id="tab-branding" onclick="switchTab('branding')" title="Branding">
+            <span class="admin-tab-icon">✨</span><span class="admin-tab-text">Branding</span>
         </button>
-        <button class="admin-tab" id="tab-users" onclick="switchTab('users')">
-            <span class="admin-tab-icon">👥</span> Users
+        <button class="admin-tab" id="tab-users" onclick="switchTab('users')" title="Users">
+            <span class="admin-tab-icon">👥</span><span class="admin-tab-text">Users</span>
         </button>
-        <button class="admin-tab" id="tab-network" onclick="switchTab('network')">
-            <span class="admin-tab-icon">🌐</span> Network
+        <button class="admin-tab" id="tab-network" onclick="switchTab('network')" title="Network">
+            <span class="admin-tab-icon">🌐</span><span class="admin-tab-text">Network</span>
         </button>
-        <button class="admin-tab" id="tab-settings" onclick="switchTab('settings')">
-            <span class="admin-tab-icon">⚙️</span> Settings
+        <button class="admin-tab" id="tab-settings" onclick="switchTab('settings')" title="Settings">
+            <span class="admin-tab-icon">⚙️</span><span class="admin-tab-text">Settings</span>
         </button>
-        <button class="admin-tab" id="tab-system" onclick="switchTab('system')">
-            <span class="admin-tab-icon">🔧</span> System
+        <button class="admin-tab" id="tab-system" onclick="switchTab('system')" title="System">
+            <span class="admin-tab-icon">🔧</span><span class="admin-tab-text">System</span>
         </button>
     </div>
     
@@ -4209,7 +4693,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.2 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -5306,6 +5790,28 @@ def render_system_section(config):
     stats = server_logger.get_stats()
     uptime_str = sys_info.get('server_uptime', 'Not started')
     
+    # Check if config file is writable
+    config_writable = check_config_writable()
+    config_warning = ""
+    if not config_writable:
+        config_warning = f'''
+        <div style="background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:0.5rem;padding:1rem;margin-bottom:1.5rem;">
+            <div style="display:flex;align-items:center;gap:0.5rem;color:#ef4444;font-weight:600;margin-bottom:0.5rem;">
+                <span style="font-size:1.25rem;">⚠️</span> Configuration File Not Writable
+            </div>
+            <div style="color:var(--text-secondary);font-size:0.9rem;">
+                The config file <code style="background:var(--bg-secondary);padding:0.15rem 0.4rem;border-radius:0.25rem;">{CONFIG_FILE}</code> cannot be written. 
+                Changes will not be saved.
+            </div>
+            <div style="margin-top:0.75rem;padding:0.75rem;background:var(--bg-secondary);border-radius:0.25rem;font-family:monospace;font-size:0.85rem;">
+                <span style="color:var(--text-secondary);"># Fix on macOS/Linux:</span><br>
+                chmod 666 {CONFIG_FILE}<br>
+                <span style="color:var(--text-secondary);"># Or change owner:</span><br>
+                sudo chown $USER {CONFIG_FILE}
+            </div>
+        </div>
+        '''
+    
     # Recent logs HTML
     recent_logs = server_logger.get_logs(limit=50)
     logs_html = ""
@@ -5404,6 +5910,7 @@ def render_system_section(config):
     return f'''
     <div class="admin-section">
         <h3>🔧 System & Diagnostics</h3>
+        {config_warning}
         <div class="admin-content">
             <div class="admin-subsection">
                 <h4>📊 Server Status</h4>
@@ -6042,14 +6549,30 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             files = {}
         
         if path == '/login':
+            client_ip = self.client_address[0]
+            
+            # Check rate limiting
+            allowed, lockout_msg = check_login_allowed(client_ip)
+            if not allowed:
+                self.send_html(render_login_page(error=lockout_msg))
+                return
+            
             username = data.get('username', '')
             password = data.get('password', '')
             user_data = config["users"].get(username)
             
-            if user_data and user_data["password_hash"] == hash_password(password):
+            # Use constant-time comparison to prevent timing attacks
+            password_hash = hash_password(password)
+            stored_hash = user_data["password_hash"] if user_data else hash_password("dummy_password_to_prevent_timing")
+            
+            if user_data and secrets.compare_digest(password_hash, stored_hash):
+                clear_failed_logins(client_ip)
                 session_id = create_session(username)
+                server_logger.info(f"Successful login for user: {username}")
                 self.redirect('/', set_cookie=session_id)
             else:
+                record_failed_login(client_ip)
+                server_logger.warning(f"Failed login attempt for user: {username} from {client_ip}")
                 self.send_html(render_login_page(error="Invalid username or password"))
         
         elif path == '/forgot-password':
@@ -6360,14 +6883,20 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     config.setdefault("branding", {})["logo"] = base64.b64encode(file_data).decode('ascii')
                     config["branding"]["logo_mime"] = mime_type
-                    save_config(config)
-                    self.send_html(render_admin_page(user, config, message="Logo uploaded successfully"))
+                    success, err = save_config(config)
+                    if success:
+                        self.send_html(render_admin_page(user, config, message="Logo uploaded successfully"))
+                    else:
+                        self.send_html(render_admin_page(user, config, error=err))
         
         elif path == '/admin/branding/logo/delete':
             config.setdefault("branding", {})["logo"] = None
             config["branding"]["logo_mime"] = None
-            save_config(config)
-            self.send_html(render_admin_page(user, config, message="Logo removed"))
+            success, err = save_config(config)
+            if success:
+                self.send_html(render_admin_page(user, config, message="Logo removed"))
+            else:
+                self.send_html(render_admin_page(user, config, error=err))
         
         elif path == '/admin/branding/favicon':
             if 'favicon' not in files:
@@ -6384,14 +6913,20 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     config.setdefault("branding", {})["favicon"] = base64.b64encode(file_data).decode('ascii')
                     config["branding"]["favicon_mime"] = mime_type
-                    save_config(config)
-                    self.send_html(render_admin_page(user, config, message="Favicon uploaded successfully"))
+                    success, err = save_config(config)
+                    if success:
+                        self.send_html(render_admin_page(user, config, message="Favicon uploaded successfully"))
+                    else:
+                        self.send_html(render_admin_page(user, config, error=err))
         
         elif path == '/admin/branding/favicon/delete':
             config.setdefault("branding", {})["favicon"] = None
             config["branding"]["favicon_mime"] = None
-            save_config(config)
-            self.send_html(render_admin_page(user, config, message="Favicon removed"))
+            success, err = save_config(config)
+            if success:
+                self.send_html(render_admin_page(user, config, message="Favicon removed"))
+            else:
+                self.send_html(render_admin_page(user, config, error=err))
         
         elif path == '/admin/branding/apple-touch-icon':
             if 'apple_touch_icon' not in files:
@@ -6409,14 +6944,20 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 else:
                     config.setdefault("branding", {})["apple_touch_icon"] = base64.b64encode(file_data).decode('ascii')
                     config["branding"]["apple_touch_icon_mime"] = mime_type
-                    save_config(config)
-                    self.send_html(render_admin_page(user, config, message="iOS Home Screen icon uploaded successfully"))
+                    success, err = save_config(config)
+                    if success:
+                        self.send_html(render_admin_page(user, config, message="iOS Home Screen icon uploaded successfully"))
+                    else:
+                        self.send_html(render_admin_page(user, config, error=err))
         
         elif path == '/admin/branding/apple-touch-icon/delete':
             config.setdefault("branding", {})["apple_touch_icon"] = None
             config["branding"]["apple_touch_icon_mime"] = None
-            save_config(config)
-            self.send_html(render_admin_page(user, config, message="iOS Home Screen icon removed"))
+            success, err = save_config(config)
+            if success:
+                self.send_html(render_admin_page(user, config, message="iOS Home Screen icon removed"))
+            else:
+                self.send_html(render_admin_page(user, config, error=err))
         
         elif path == '/admin/user/add':
             username = data.get('username', '').strip()
@@ -6701,7 +7242,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.2 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         
@@ -7395,7 +7936,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME
     
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.2 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

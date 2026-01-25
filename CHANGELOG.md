@@ -5,6 +5,46 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2025-01-25
+
+### Added
+- Comprehensive mobile CSS optimizations
+- Safe-area-insets for notched phones (iPhone X+)
+- Touch-friendly button sizes (min 44px targets)
+- Admin tabs show icons-only on mobile with tooltips
+- Login rate limiting (5 attempts, 15-minute lockout)
+- Timing-attack resistant password comparison
+- Print stylesheet
+- Reduced motion support (`prefers-reduced-motion`)
+- Touch feedback animations on buttons
+
+### Changed
+- Form inputs now use 16px font to prevent iOS zoom
+- Improved mobile layouts for item lists and forms
+- Better horizontal scrolling on admin tabs with fade indicator
+- Color grid uses 2 columns on mobile, 1 on very small screens
+- Widgets container responsive grid improvements
+
+### Fixed
+- Bare `except:` clauses replaced with specific exceptions
+- Improved error messages for button widget configuration
+
+### Security
+- Added login attempt tracking and IP-based lockout
+- Password comparison now uses `secrets.compare_digest()`
+- Failed login attempts are logged with IP address
+
+## [1.1.1] - 2025-01-25
+
+### Fixed
+- Config file permission error now shows user-friendly message instead of crashing
+- Branding uploads (logo, favicon, iOS icon) now handle save errors gracefully
+
+### Added
+- Warning banner in System tab when config file is not writable
+- Instructions shown to fix permissions (chmod commands)
+- `check_config_writable()` function for permission detection
+
 ## [1.1.0] - 2025-01-25
 
 ### Added

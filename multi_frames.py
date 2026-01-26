@@ -6505,7 +6505,7 @@ def render_network_section(config, server_port=8080):
                 <div class="form-group" style="flex:1;">
                     <label>Hostname</label>
                     <div style="display:flex;align-items:center;gap:0;">
-                        <input type="text" name="mdns_hostname" value="{escape_html(mdns_config.get('hostname', 'multi-frames'))}" pattern="[a-zA-Z0-9-]+" placeholder="multi-frames" style="border-radius:var(--radius) 0 0 var(--radius);">
+                        <input type="text" name="mdns_hostname" value="{escape_html(mdns_config.get('hostname', 'multi-frames'))}" pattern="[-a-zA-Z0-9]+" placeholder="multi-frames" style="border-radius:var(--radius) 0 0 var(--radius);">
                         <span style="background:var(--bg-tertiary);border:1px solid var(--border);border-left:none;padding:0.5rem 0.75rem;color:var(--text-secondary);font-size:0.9rem;border-radius:0 var(--radius) var(--radius) 0;">.local</span>
                     </div>
                     <small style="color:var(--text-secondary);display:block;margin-top:0.25rem;">Letters, numbers, and hyphens only</small>
@@ -6635,7 +6635,7 @@ def render_raspberry_pi_section():
                         <label>Change Hostname</label>
                         <div style="display:flex;gap:0.5rem;">
                             <input type="text" name="hostname" value="{escape_html(pi_info.get('hostname', ''))}" 
-                                   pattern="[a-zA-Z0-9]([a-zA-Z0-9-]{{0,61}}[a-zA-Z0-9])?" 
+                                   pattern="[a-zA-Z0-9]([-a-zA-Z0-9]{{0,61}}[a-zA-Z0-9])?" 
                                    placeholder="my-raspberry-pi" style="flex:1;">
                             <button type="submit" class="btn btn-sm">Set Hostname</button>
                         </div>

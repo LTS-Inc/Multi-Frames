@@ -6832,7 +6832,7 @@ def render_update_section(config):
     
     # Update check result display
     last_check = update_settings.get('last_check')
-    last_result = update_settings.get('last_result', {})
+    last_result = update_settings.get('last_result') or {}
     
     update_status_html = ""
     if last_result.get('update_available'):

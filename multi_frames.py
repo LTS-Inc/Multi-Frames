@@ -5475,10 +5475,13 @@ def render_admin_page(user, config, message=None, error=None):
     
     content = f"""
     {msg_html}
-    
+
     <!-- Server Status Dashboard (Always visible) -->
     {render_status_dashboard(config)}
-    
+
+    <!-- Admin Alert Banners -->
+    {render_admin_alerts(config)}
+
     <script>
     function toggleEditIframe(index) {{
         var panel = document.getElementById('edit-iframe-' + index);
@@ -6334,6 +6337,101 @@ def render_password_reset_requests(config):
                 <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Dismiss all requests?')">Dismiss All Requests</button>
             </form>
         </div>
+    </div>
+    '''
+
+
+def render_admin_alerts(config):
+    """Render alert banners for important admin notifications."""
+    alerts = []
+
+    # Check for connectivity reports
+    reports = config.get("connectivity_reports", [])
+    if reports:
+        count = len(reports)
+        latest = reports[-1] if reports else {}
+        latest_user = escape_html(latest.get('username', 'Unknown'))
+        latest_time = escape_html(latest.get('timestamp', ''))
+        alerts.append({
+            'type': 'warning',
+            'icon': '📡',
+            'title': f'{count} Connectivity Report{"s" if count > 1 else ""} Pending',
+            'message': f'Latest from {latest_user} at {latest_time}',
+            'action_text': 'View Reports',
+            'action_js': "switchTab('system'); document.querySelector('.connectivity-report')?.scrollIntoView({behavior:'smooth'})"
+        })
+
+    # Check for password reset requests
+    reset_requests = config.get("password_reset_requests", [])
+    if reset_requests:
+        count = len(reset_requests)
+        alerts.append({
+            'type': 'info',
+            'icon': '🔑',
+            'title': f'{count} Password Reset Request{"s" if count > 1 else ""}',
+            'message': 'Users are waiting for password reset approval',
+            'action_text': 'View Requests',
+            'action_js': "switchTab('users'); document.querySelector('.password-reset-requests')?.scrollIntoView({behavior:'smooth'})"
+        })
+
+    if not alerts:
+        return ''
+
+    # Build alerts HTML
+    alerts_html = ''
+    for alert in alerts:
+        alert_type = alert['type']
+        if alert_type == 'warning':
+            bg_color = 'rgba(245, 158, 11, 0.15)'
+            border_color = '#f59e0b'
+            icon_bg = '#f59e0b'
+        elif alert_type == 'error':
+            bg_color = 'rgba(239, 68, 68, 0.15)'
+            border_color = '#ef4444'
+            icon_bg = '#ef4444'
+        else:  # info
+            bg_color = 'rgba(59, 130, 246, 0.15)'
+            border_color = '#3b82f6'
+            icon_bg = '#3b82f6'
+
+        alerts_html += f'''
+        <div class="admin-alert" style="
+            background: {bg_color};
+            border: 1px solid {border_color};
+            border-radius: var(--radius);
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        ">
+            <div style="
+                width: 36px;
+                height: 36px;
+                border-radius: 50%;
+                background: {icon_bg};
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.1rem;
+                flex-shrink: 0;
+            ">{alert['icon']}</div>
+            <div style="flex: 1; min-width: 200px;">
+                <div style="font-weight: 600; font-size: 0.95rem;">{alert['title']}</div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary);">{alert['message']}</div>
+            </div>
+            <button class="btn btn-sm" onclick="{alert['action_js']}" style="
+                background: {border_color};
+                border-color: {border_color};
+                white-space: nowrap;
+            ">{alert['action_text']}</button>
+        </div>
+        '''
+
+    return f'''
+    <div class="admin-alerts" style="margin-bottom: 1rem;">
+        {alerts_html}
     </div>
     '''
 
@@ -7758,13 +7856,15 @@ def render_system_section(config):
                 }});
             }}
             </script>
-            
+
             <div style="margin-top:0.75rem;">
                 <button class="btn btn-secondary btn-sm" onclick="testAllFrames()">🧪 Test All</button>
             </div>
+
+            {render_connectivity_reports(config)}
         </div>
     </div>
-    
+
     <!-- Updates & Firmware -->
     <div class="admin-section">
         <h3 style="display:flex;align-items:center;gap:0.5rem;">

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1.2
+Multi-Frames v1.1.3
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -25,6 +25,13 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.3 (2025-01-25)
+        - Added password change functionality for all users
+        - Users can now change their own password in Admin → Users
+        - Admins can change any user's password
+        - Terminal banner shows security status (green when password changed)
+        - Password confirmation required when changing passwords
+
     v1.1.2 (2025-01-25)
         - Comprehensive mobile optimization (touch targets, layouts)
         - Added safe-area-insets for notched phones
@@ -105,7 +112,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 VERSION_DATE = "2025-01-25"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -326,7 +333,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1.2 by LTS, Inc.",
+            "text": "Multi-Frames v1.1.3 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -2596,7 +2603,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.2 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.3 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -4389,24 +4396,51 @@ def render_admin_page(user, config, message=None, error=None):
     
     # Users section
     users_list = ""
-    for username, data in config.get("users", {}).items():
-        is_admin = "Admin" if data.get("is_admin") else "User"
+    for username, udata in config.get("users", {}).items():
+        is_admin_badge = "Admin" if udata.get("is_admin") else "User"
+        is_current_user = username == user
+        user_id = f"user-{abs(hash(username)) % 100000}"
+        
         users_list += f"""
         <li>
-            <div class="item-info">
-                <strong>{escape_html(username)}</strong>
-                <small>{is_admin}</small>
+            <div class="item-row">
+                <div class="item-info">
+                    <strong>{escape_html(username)}</strong> {' <span style="color:var(--accent);font-size:0.75rem;">(you)</span>' if is_current_user else ''}
+                    <small>{is_admin_badge}</small>
+                </div>
+                <div class="item-actions">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="togglePasswordChange('{user_id}')">Change Password</button>
+                    {"" if is_current_user else f'''
+                    <form method="POST" action="/admin/user/delete" style="display:inline;">
+                        <input type="hidden" name="username" value="{escape_html(username)}">
+                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete user {escape_html(username)}?')">Delete</button>
+                    </form>
+                    '''}
+                </div>
             </div>
-            <div class="item-actions">
-                {"" if username == user else f'''
-                <form method="POST" action="/admin/user/delete" style="display:inline;">
+            <div class="edit-panel" id="{user_id}-password" style="display:none;">
+                <form method="POST" action="/admin/user/change-password">
                     <input type="hidden" name="username" value="{escape_html(username)}">
-                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this user?')">Delete</button>
+                    <div class="inline-form">
+                        <div class="form-group">
+                            <label>New Password</label>
+                            <input type="password" name="new_password" required minlength="6" placeholder="Minimum 6 characters">
+                        </div>
+                        <div class="form-group">
+                            <label>Confirm Password</label>
+                            <input type="password" name="confirm_password" required minlength="6" placeholder="Repeat password">
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;margin-top:1rem;">
+                        <button type="submit">Update Password</button>
+                        <button type="button" class="btn btn-secondary" onclick="togglePasswordChange('{user_id}')">Cancel</button>
+                    </div>
                 </form>
-                '''}
             </div>
         </li>
         """
+    if not users_list:
+        users_list = '<li class="empty-state">No users configured</li>'
     
     # Branding section
     branding = config.get("branding", {})
@@ -4472,6 +4506,29 @@ def render_admin_page(user, config, message=None, error=None):
             panel.style.display = 'block';
         }} else {{
             panel.style.display = 'none';
+        }}
+    }}
+    
+    function togglePasswordChange(userId) {{
+        var panel = document.getElementById(userId + '-password');
+        if (!panel) {{
+            console.error('Password panel not found for:', userId);
+            alert('Error: Could not find password change panel');
+            return;
+        }}
+        if (panel.style.display === 'none' || panel.style.display === '') {{
+            // Close all other password panels first
+            document.querySelectorAll('[id$="-password"].edit-panel').forEach(function(p) {{
+                p.style.display = 'none';
+            }});
+            panel.style.display = 'block';
+            var input = panel.querySelector('input[name="new_password"]');
+            if (input) input.focus();
+        }} else {{
+            panel.style.display = 'none';
+            // Clear the form
+            var form = panel.querySelector('form');
+            if (form) form.reset();
         }}
     }}
     
@@ -4693,7 +4750,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.2 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.3 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -6986,6 +7043,26 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self.send_html(render_admin_page(user, config, error="User not found"))
         
+        elif path == '/admin/user/change-password':
+            target_username = data.get('username', '')
+            new_password = data.get('new_password', '')
+            confirm_password = data.get('confirm_password', '')
+            
+            if not target_username or target_username not in config.get("users", {}):
+                self.send_html(render_admin_page(user, config, error="User not found"))
+            elif not new_password or len(new_password) < 6:
+                self.send_html(render_admin_page(user, config, error="Password must be at least 6 characters"))
+            elif new_password != confirm_password:
+                self.send_html(render_admin_page(user, config, error="Passwords do not match"))
+            else:
+                config["users"][target_username]["password_hash"] = hash_password(new_password)
+                success, err = save_config(config)
+                if success:
+                    server_logger.info(f"Password changed for user: {target_username} by admin: {user}")
+                    self.send_html(render_admin_page(user, config, message=f"Password updated for '{target_username}'"))
+                else:
+                    self.send_html(render_admin_page(user, config, error=err))
+        
         elif path == '/admin/password-reset/set':
             request_id = data.get('request_id', '')
             new_password = data.get('new_password', '')
@@ -7242,7 +7319,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.2 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.3 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         
@@ -7910,6 +7987,12 @@ def print_banner(args, config, use_color=True):
             print(f"    {c.DIM}mDNS:{c.RESET}       {c.YELLOW}○{c.RESET} zeroconf not installed")
     else:
         print(f"    {c.DIM}mDNS:{c.RESET}       {c.GRAY}○{c.RESET} Disabled")
+    
+    # Security status
+    if default_pw:
+        print(f"    {c.DIM}Security:{c.RESET}   {c.YELLOW}○{c.RESET} Default password")
+    else:
+        print(f"    {c.DIM}Security:{c.RESET}   {c.GREEN}●{c.RESET} Password changed")
     print()
     
     if default_pw:
@@ -7936,7 +8019,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME
     
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.2 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.3 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

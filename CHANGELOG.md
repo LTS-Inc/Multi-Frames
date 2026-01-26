@@ -5,6 +5,20 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2025-01-25
+
+### Added
+- Password change functionality in Admin → Users
+- "Change Password" button for each user
+- Password confirmation field (must match)
+- Terminal banner now shows security status line
+- Green indicator when admin password has been changed
+- Admins can change any user's password
+
+### Changed
+- Terminal banner shows `Security: ● Password changed` (green) or `Security: ○ Default password` (yellow)
+- User list now shows "(you)" indicator for current user
+
 ## [1.1.2] - 2025-01-25
 
 ### Added

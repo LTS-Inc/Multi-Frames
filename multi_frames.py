@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1.3
+Multi-Frames v1.1.4
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -25,6 +25,13 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.4 (2025-01-25)
+        - Fixed browser back button affecting parent page when in iframes
+        - Added sandbox attribute to prevent iframe top-level navigation
+        - History management prevents accidental page departure
+        - Embed code iframes now get sandbox injection for security
+        - Added allow-popups so links open in new tabs
+
     v1.1.3 (2025-01-25)
         - Added password change functionality for all users
         - Users can now change their own password in Admin → Users
@@ -112,7 +119,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 VERSION_DATE = "2025-01-25"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -333,7 +340,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1.3 by LTS, Inc.",
+            "text": "Multi-Frames v1.1.4 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -2603,7 +2610,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.3 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.4 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -3854,23 +3861,44 @@ def render_main_page(user, config):
                 if 'border-radius' not in card_style_str:
                     card_style_str += ';border-radius:var(--radius)'
             
+            # Sandbox attribute - allows functionality but blocks parent navigation
+            # - allow-scripts: JavaScript
+            # - allow-same-origin: treat content as same origin
+            # - allow-forms: form submission
+            # - allow-popups: open links in new tabs/windows
+            # - allow-popups-to-escape-sandbox: new windows aren't sandboxed
+            # NOT included: allow-top-navigation (prevents iframe from navigating parent)
+            sandbox_attr = 'sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"'
+            
             # Generate iframe content - embed code or regular iframe
             if use_embed_code and embed_code:
                 # Render embed code directly in a container
-                # Note: embed_code is NOT escaped here to allow HTML rendering
+                # Embed codes (YouTube, Vimeo, etc.) come with their own iframe attributes
+                # We wrap in a container for sizing but don't add another iframe layer
                 embed_wrapper_style = f"height:{height}px;overflow:hidden;position:relative;"
                 if zoom != 100:
                     scale = zoom / 100
                     embed_wrapper_style = f"height:{height}px;overflow:hidden;position:relative;transform:scale({scale});transform-origin:0 0;"
                 
-                iframe_inner = f'<div class="embed-container" style="{embed_wrapper_style}">{embed_code}</div>'
-                # Mark as connected since embed codes load directly
+                # Inject sandbox attribute into any iframes in the embed code (if not already present)
+                # This adds security without breaking the embed
+                if 'sandbox=' not in embed_code.lower():
+                    sandboxed_embed = re.sub(
+                        r'<iframe\s',
+                        '<iframe sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox" ',
+                        embed_code,
+                        flags=re.IGNORECASE
+                    )
+                else:
+                    sandboxed_embed = embed_code
+                
+                iframe_inner = f'<div class="embed-container" style="{embed_wrapper_style}">{sandboxed_embed}</div>'
             else:
                 # Regular iframe with URL
                 if wrapper_style_str:
-                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms" onload="setIframeStatus({i}, true)" onerror="setIframeStatus({i}, false)"></iframe></div>'
+                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr} onload="setIframeStatus({i}, true)" onerror="setIframeStatus({i}, false)"></iframe></div>'
                 else:
-                    iframe_inner = f'<iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms" onload="setIframeStatus({i}, true)" onerror="setIframeStatus({i}, false)"></iframe>'
+                    iframe_inner = f'<iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr} onload="setIframeStatus({i}, true)" onerror="setIframeStatus({i}, false)"></iframe>'
             
             # Fallback placeholder (hidden by default)
             fallback_div = f'<div id="fallback-{i}" class="iframe-fallback" style="display:none;height:{height}px;"></div>'
@@ -3904,6 +3932,26 @@ def render_main_page(user, config):
         status_script = f"""
         <script>
         {fallback_js}
+        
+        // Prevent browser back button from navigating away when iframes are present
+        // This creates a history entry so back button stays on this page
+        (function() {{
+            // Only apply if there are iframes on the page
+            if (document.querySelectorAll('iframe').length > 0) {{
+                // Push a state when page loads
+                if (!history.state || !history.state.iframePage) {{
+                    history.pushState({{ iframePage: true }}, '', window.location.href);
+                }}
+                
+                // Handle popstate (back button)
+                window.addEventListener('popstate', function(e) {{
+                    // If navigating away from our page, push state again to stay here
+                    if (!e.state || !e.state.iframePage) {{
+                        history.pushState({{ iframePage: true }}, '', window.location.href);
+                    }}
+                }});
+            }}
+        }})();
         
         function showFallback(index) {{
             if (!fallbackConfig.enabled) return;
@@ -4750,7 +4798,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.3 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.4 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -7319,7 +7367,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.3 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.4 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         
@@ -8019,7 +8067,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME
     
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.3 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.4 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

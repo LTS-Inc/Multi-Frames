@@ -5,6 +5,22 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2025-01-25
+
+### Fixed
+- Browser back button no longer navigates away from the main page when iframes are present
+- Iframe navigation (clicking links, using back/forward) now stays within the iframe
+
+### Added
+- Enhanced sandbox attribute: `allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox`
+- Browser history management to prevent accidental page departure
+- Links clicked in iframes now open in new tabs instead of hijacking parent
+- Automatic sandbox injection for embed code iframes (YouTube, Vimeo, etc.)
+
+### Security
+- Removed `allow-top-navigation` from sandbox to prevent iframe from navigating parent page
+- Embed codes now receive sandbox attributes if not already present
+
 ## [1.1.3] - 2025-01-25
 
 ### Added

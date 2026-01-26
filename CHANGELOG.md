@@ -5,6 +5,33 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.7] - 2025-01-26
+
+### Added
+- **Auto-Restart on Crash**: Server automatically restarts with exponential backoff (up to 10 attempts)
+- **Server Health Alerts**: Track and display errors, crashes, and warnings in admin panel
+- **Alert System**: Severity levels (critical, error, warning, info) with timestamps
+- **Crash Counter**: Tracks server restarts and displays in System tab
+- **Clear Alerts**: Button to clear all server health alerts
+- **--no-auto-restart**: Command line flag to disable auto-restart for debugging
+
+### Fixed
+- **Request Error Handling**: Wrapped do_GET and do_POST in try/except blocks
+- **Connection Errors**: Graceful handling of BrokenPipeError and ConnectionResetError
+- **Regex Pattern**: Fixed HTML input pattern attributes for modern browser compatibility (v flag)
+
+### Changed
+- Server stability significantly improved - crashes now auto-recover
+- Error messages are captured and displayed in admin panel
+- Improved logging of request errors
+
+### Technical
+- `ServerAlerts` class for tracking server health
+- `_handle_request_error()` method for graceful error handling
+- `track_server_alert()` function for logging alerts
+- Main loop now has crash recovery with backoff
+- Alerts consolidate repeated errors within 60 seconds
+
 ## [1.1.6] - 2025-01-26
 
 ### Added

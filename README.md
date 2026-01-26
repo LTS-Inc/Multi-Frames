@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.1.6-2025--01--26-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.1.7-2025--01--26-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -239,30 +239,30 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.1.6
+## 🆕 What's New in v1.1.7
 
 <table>
 <tr>
 <td>
 
-### 🔄 Firmware Updates via GitHub
+### 🛡️ Server Reliability
 
-- Check for updates with one click
-- Pull latest changes from GitHub
-- Auto-detect repo from git remote
-- Shows git branch & commit status
-- Version comparison notifications
+- Auto-restart on crash (up to 10 attempts)
+- Exponential backoff between restarts
+- Health alert system in admin panel
+- Graceful connection error handling
+- Crash counter and logging
 
 </td>
 <td>
 
-### 🍓 Raspberry Pi Support
+### 🔄 Update System
 
-- Auto-detection of Pi hardware
-- Temperature monitoring with alerts
-- Throttling/voltage warnings
-- Change hostname from web UI
-- Reboot/Shutdown controls
+- Check for updates from GitHub
+- Pull latest changes with one click
+- Auto-detect repo from git remote
+- Shows git branch & commit status
+- Version comparison notifications
 
 </td>
 </tr>
@@ -524,6 +524,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.1.7** | 2025-01-26 | Auto-restart on crash, server health alerts, reliability improvements |
 | **1.1.6** | 2025-01-26 | GitHub update system, git pull support, version checking |
 | **1.1.5** | 2025-01-25 | Raspberry Pi auto-detection, temperature monitoring, Pi controls |
 | **1.1.4** | 2025-01-25 | Fixed iframe back button navigation |

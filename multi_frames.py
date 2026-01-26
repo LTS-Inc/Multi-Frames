@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1.6
+Multi-Frames v1.1.7
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -19,6 +19,7 @@ Features:
 - Responsive design
 - Raspberry Pi auto-detection and management
 - GitHub integration for firmware updates
+- Auto-restart on crash with alerts
 
 Usage:
     python multi_frames.py [--port PORT] [--host HOST]
@@ -27,6 +28,18 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.7 (2025-01-26)
+        - Server reliability improvements
+        - Auto-restart on crash with exponential backoff
+        - Server health alert system
+        - Request error handling wrapper for do_GET/do_POST
+        - Connection reset and broken pipe handling
+        - Alert tracking with severity levels
+        - Crash counter and restart logging
+        - Clear alerts button in admin panel
+        - Fixed HTML pattern attribute regex for modern browsers
+        - --no-auto-restart flag for debugging
+
     v1.1.6 (2025-01-26)
         - Added firmware update system with GitHub integration
         - Check for updates from GitHub releases or raw file
@@ -141,7 +154,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.6"
+VERSION = "1.1.7"
 VERSION_DATE = "2025-01-26"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -263,6 +276,84 @@ class ServerLogger:
 
 # Global logger instance
 server_logger = ServerLogger()
+
+# =============================================================================
+# Server Alert System
+# =============================================================================
+
+class ServerAlerts:
+    """Track server alerts and errors for display in admin panel."""
+    
+    def __init__(self, max_alerts=100):
+        self.alerts = []
+        self.max_alerts = max_alerts
+        self.crash_count = 0
+        self.last_crash = None
+        self.error_counts = {}  # Track error frequency
+    
+    def add_alert(self, alert_type, message, severity='warning'):
+        """Add an alert. Severity: 'info', 'warning', 'error', 'critical'"""
+        alert = {
+            'timestamp': datetime.now().isoformat(),
+            'type': alert_type,
+            'message': message[:500],  # Limit message length
+            'severity': severity,
+            'count': 1
+        }
+        
+        # Check if same error occurred recently (within 60s) - consolidate
+        for existing in self.alerts[-10:]:
+            if (existing['type'] == alert_type and 
+                existing['message'] == alert['message'] and
+                existing['severity'] == severity):
+                existing['count'] = existing.get('count', 1) + 1
+                existing['timestamp'] = alert['timestamp']
+                return
+        
+        self.alerts.append(alert)
+        
+        # Track error frequency
+        self.error_counts[alert_type] = self.error_counts.get(alert_type, 0) + 1
+        
+        # Trim old alerts
+        if len(self.alerts) > self.max_alerts:
+            self.alerts = self.alerts[-self.max_alerts:]
+    
+    def record_crash(self, error_msg=None):
+        """Record a server crash/restart."""
+        self.crash_count += 1
+        self.last_crash = datetime.now().isoformat()
+        self.add_alert('crash', error_msg or 'Server crashed and restarted', 'critical')
+    
+    def get_alerts(self, limit=50, severity=None):
+        """Get recent alerts, optionally filtered by severity."""
+        alerts = self.alerts
+        if severity:
+            alerts = [a for a in alerts if a['severity'] == severity]
+        return list(reversed(alerts[-limit:]))
+    
+    def get_stats(self):
+        """Get alert statistics."""
+        return {
+            'total_alerts': len(self.alerts),
+            'crash_count': self.crash_count,
+            'last_crash': self.last_crash,
+            'error_counts': dict(self.error_counts),
+            'critical_count': len([a for a in self.alerts if a['severity'] == 'critical']),
+            'error_count': len([a for a in self.alerts if a['severity'] == 'error']),
+            'warning_count': len([a for a in self.alerts if a['severity'] == 'warning'])
+        }
+    
+    def clear(self):
+        """Clear all alerts."""
+        self.alerts = []
+        self.error_counts = {}
+
+server_alerts = ServerAlerts()
+
+def track_server_alert(alert_type, message, severity='error'):
+    """Convenience function to track server alerts."""
+    server_alerts.add_alert(alert_type, message, severity)
 
 def get_system_info():
     """Get system information for debugging."""
@@ -975,7 +1066,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1.6 by LTS, Inc.",
+            "text": "Multi-Frames v1.1.7 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -3256,7 +3347,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.6 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.7 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -5444,7 +5535,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.6 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.7 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -6860,6 +6951,56 @@ def render_system_section(config):
         </div>
         '''
     
+    # Server health alerts
+    alert_stats = server_alerts.get_stats()
+    alerts_section = ""
+    if alert_stats['crash_count'] > 0 or alert_stats['critical_count'] > 0 or alert_stats['error_count'] > 0:
+        recent_alerts = server_alerts.get_alerts(limit=10)
+        alerts_html = ""
+        for alert in recent_alerts:
+            severity_colors = {
+                'critical': '#ef4444',
+                'error': '#f97316',
+                'warning': '#f59e0b',
+                'info': '#3b82f6'
+            }
+            color = severity_colors.get(alert['severity'], '#888')
+            count_badge = f' <span style="background:{color};color:white;padding:0.1rem 0.4rem;border-radius:0.25rem;font-size:0.7rem;">×{alert["count"]}</span>' if alert.get('count', 1) > 1 else ''
+            alerts_html += f'''
+            <div style="padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:0.5rem;">
+                <span style="color:{color};font-size:1rem;">{"🔴" if alert["severity"] == "critical" else "🟠" if alert["severity"] == "error" else "🟡" if alert["severity"] == "warning" else "🔵"}</span>
+                <div style="flex:1;">
+                    <div style="font-size:0.8rem;color:var(--text-secondary);">{escape_html(alert["timestamp"][:19])}</div>
+                    <div style="font-size:0.85rem;">{escape_html(alert["message"][:200])}{count_badge}</div>
+                </div>
+            </div>
+            '''
+        
+        crash_badge = f'<span style="background:#ef4444;color:white;padding:0.25rem 0.5rem;border-radius:0.25rem;font-size:0.8rem;margin-left:0.5rem;">🔄 {alert_stats["crash_count"]} restart{"s" if alert_stats["crash_count"] != 1 else ""}</span>' if alert_stats['crash_count'] > 0 else ''
+        
+        alerts_section = f'''
+        <div style="background:rgba(239,68,68,0.1);border:1px solid #ef4444;border-radius:0.5rem;padding:1rem;margin-bottom:1.5rem;">
+            <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;">
+                <span style="font-size:1.25rem;">🚨</span>
+                <span style="font-weight:600;color:#ef4444;">Server Health Alerts</span>
+                {crash_badge}
+            </div>
+            <div style="background:var(--bg-primary);border-radius:var(--radius);max-height:200px;overflow-y:auto;">
+                {alerts_html if alerts_html else '<div style="padding:1rem;color:var(--text-secondary);text-align:center;">No recent alerts</div>'}
+            </div>
+            <div style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                <span style="font-size:0.8rem;color:var(--text-secondary);">
+                    Critical: {alert_stats["critical_count"]} • 
+                    Errors: {alert_stats["error_count"]} • 
+                    Warnings: {alert_stats["warning_count"]}
+                </span>
+                <form method="POST" action="/admin/system/clear-alerts" style="margin-left:auto;">
+                    <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Clear all alerts?')">Clear Alerts</button>
+                </form>
+            </div>
+        </div>
+        '''
+    
     # Recent logs HTML
     recent_logs = server_logger.get_logs(limit=50)
     logs_html = ""
@@ -6959,6 +7100,7 @@ def render_system_section(config):
     <div class="admin-section">
         <h3>🔧 System & Diagnostics</h3>
         {config_warning}
+        {alerts_section}
         <div class="admin-content">
             <div class="admin-subsection">
                 <h4>📊 Server Status</h4>
@@ -7465,6 +7607,39 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body.encode('utf-8'))
     
+    def _handle_request_error(self, error, method):
+        """Handle and log request errors gracefully."""
+        error_msg = str(error)
+        path = getattr(self, 'path', 'unknown')
+        client = self.client_address[0] if self.client_address else 'unknown'
+        
+        # Log the error
+        server_logger.error(f"{method} {path} error from {client}: {error_msg}")
+        
+        # Track the error for alerts
+        track_server_alert('request_error', f"{method} {path}: {error_msg}")
+        
+        # Try to send an error response to the client
+        try:
+            error_html = f'''
+            <div class="card" style="max-width:500px;margin:2rem auto;text-align:center;">
+                <h2 style="color:#ef4444;">⚠️ Server Error</h2>
+                <p style="margin:1rem 0;color:var(--text-secondary);">
+                    An unexpected error occurred while processing your request.
+                </p>
+                <p style="font-size:0.85rem;color:var(--text-secondary);">
+                    Error has been logged. Please try again or contact the administrator.
+                </p>
+                <div style="margin-top:1.5rem;">
+                    <a href="/" class="btn">Return Home</a>
+                </div>
+            </div>
+            '''
+            self.send_html(render_page("Error", error_html, None, load_config()), 500)
+        except:
+            # If we can't even send an error page, just pass
+            pass
+    
     def redirect(self, location, set_cookie=None, clear_cookie=None):
         """Send a redirect response."""
         self.send_response(302)
@@ -7490,7 +7665,20 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             return {k: v[0] for k, v in parse_qs(post_body.decode('utf-8')).items()}
     
     def do_GET(self):
-        """Handle GET requests."""
+        """Handle GET requests with comprehensive error handling."""
+        try:
+            self._handle_get()
+        except BrokenPipeError:
+            # Client disconnected - this is normal, don't log as error
+            pass
+        except ConnectionResetError:
+            # Client reset connection - normal
+            pass
+        except Exception as e:
+            self._handle_request_error(e, 'GET')
+    
+    def _handle_get(self):
+        """Internal GET handler."""
         user = self.get_session_user()
         config = load_config()
         path = self.path.split('?')[0]
@@ -7609,7 +7797,20 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             self.send_html(render_page("Not Found", '<div class="card"><h2>404</h2><p>Page not found.</p></div>', user, config), 404)
     
     def do_POST(self):
-        """Handle POST requests."""
+        """Handle POST requests with comprehensive error handling."""
+        try:
+            self._handle_post()
+        except BrokenPipeError:
+            # Client disconnected - this is normal
+            pass
+        except ConnectionResetError:
+            # Client reset connection - normal
+            pass
+        except Exception as e:
+            self._handle_request_error(e, 'POST')
+    
+    def _handle_post(self):
+        """Internal POST handler."""
         user = self.get_session_user()
         config = load_config()
         path = self.path.split('?')[0]
@@ -8337,7 +8538,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.6 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.7 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         
@@ -8492,6 +8693,11 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             server_logger.clear_stats()
             server_logger.info("Statistics reset", extra=user)
             self.send_html(render_admin_page(user, config, message="Statistics reset"))
+        
+        elif path == '/admin/system/clear-alerts':
+            server_alerts.clear()
+            server_logger.info("Server alerts cleared", extra=user)
+            self.send_html(render_admin_page(user, config, message="Server alerts cleared"))
         
         elif path == '/admin/system/test-log':
             server_logger.debug("Test DEBUG message", extra=user)
@@ -9246,10 +9452,11 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME
     
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.6 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.7 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')
+    parser.add_argument('--no-auto-restart', action='store_true', help='Disable auto-restart on crash')
     args = parser.parse_args()
     
     # Check color support
@@ -9273,11 +9480,75 @@ def main():
     # Print banner
     print_banner(args, config, use_color)
     
-    with ThreadedTCPServer((args.host, args.port), IFrameHandler) as httpd:
+    # Auto-restart settings
+    max_restarts = 10
+    restart_count = 0
+    restart_window = 300  # Reset restart count after 5 minutes of stability
+    last_restart = None
+    
+    while True:
         try:
-            httpd.serve_forever()
+            with ThreadedTCPServer((args.host, args.port), IFrameHandler) as httpd:
+                # Reset restart count if server has been stable
+                if last_restart and (datetime.now() - last_restart).total_seconds() > restart_window:
+                    restart_count = 0
+                
+                httpd.serve_forever()
+                
         except KeyboardInterrupt:
             print_shutdown(use_color)
+            break
+            
+        except OSError as e:
+            if 'Address already in use' in str(e):
+                print(f"\n{'='*60}")
+                print(f"ERROR: Port {args.port} is already in use!")
+                print(f"Try: python multi_frames.py --port {args.port + 1}")
+                print(f"{'='*60}\n")
+                break
+            else:
+                raise
+                
+        except Exception as e:
+            error_msg = str(e)
+            server_logger.error(f"Server crashed: {error_msg}")
+            server_alerts.record_crash(error_msg)
+            
+            if args.no_auto_restart:
+                print(f"\n{'='*60}")
+                print(f"SERVER CRASHED: {error_msg}")
+                print(f"Auto-restart disabled. Exiting.")
+                print(f"{'='*60}\n")
+                break
+            
+            restart_count += 1
+            last_restart = datetime.now()
+            
+            if restart_count > max_restarts:
+                print(f"\n{'='*60}")
+                print(f"SERVER CRASHED TOO MANY TIMES ({max_restarts})")
+                print(f"Last error: {error_msg}")
+                print(f"Please check the logs and fix the issue.")
+                print(f"{'='*60}\n")
+                break
+            
+            # Wait before restart (exponential backoff)
+            wait_time = min(2 ** restart_count, 30)  # Max 30 seconds
+            print(f"\n{'='*60}")
+            print(f"SERVER CRASHED: {error_msg}")
+            print(f"Restarting in {wait_time} seconds... (attempt {restart_count}/{max_restarts})")
+            print(f"{'='*60}\n")
+            
+            time_module.sleep(wait_time)
+            
+            # Reload config in case it was corrupted
+            try:
+                config = load_config()
+            except:
+                pass
+            
+            server_logger.info(f"Server restarting after crash (attempt {restart_count})")
+
 
 if __name__ == '__main__':
     main()

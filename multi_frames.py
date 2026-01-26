@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1.9
+Multi-Frames v1.1.10
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -28,9 +28,18 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.10 (2025-01-26)
+        - Modern status dashboard at top of admin page
+        - Server health banner with uptime and status
+        - Raspberry Pi info card (temp, memory, disk, power)
+        - Modern tabbed logs viewer (Requests, Logs, Errors)
+        - Streamlined System panel with collapsible sections
+        - Connectivity testing with visual status indicators
+        - Improved overall admin UI organization
+
     v1.1.9 (2025-01-26)
         - Git clone URL field for easy repository configuration
-        - Auto-parse GitHub URLs (HTTPS, SSH, short formats)
+        - Auto-parse GitHub URLs (HTTPS, SSH, authenticated, short formats)
         - Improved update settings UI with auto-open when unconfigured
         - Repository configuration status display
         - Fixed NoneType error in render_update_section
@@ -176,7 +185,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.9"
+VERSION = "1.1.10"
 VERSION_DATE = "2025-01-26"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -1009,8 +1018,10 @@ def parse_git_url(url):
     Supports:
     - https://github.com/owner/repo.git
     - https://github.com/owner/repo
+    - https://user:token@github.com/owner/repo.git (authenticated)
     - git@github.com:owner/repo.git
     - github.com/owner/repo
+    - owner/repo
     """
     if not url:
         return None, None
@@ -1020,6 +1031,11 @@ def parse_git_url(url):
     # Remove .git suffix
     if url.endswith('.git'):
         url = url[:-4]
+    
+    # Handle authenticated HTTPS: https://user:token@github.com/owner/repo
+    auth_match = re.match(r'https?://[^@]+@github\.com/([^/]+)/([^/]+)/?', url)
+    if auth_match:
+        return auth_match.group(1), auth_match.group(2)
     
     # Handle SSH format: git@github.com:owner/repo
     ssh_match = re.match(r'git@github\.com:([^/]+)/(.+)', url)
@@ -1129,7 +1145,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1.9 by LTS, Inc.",
+            "text": "Multi-Frames v1.1.10 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -3410,7 +3426,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.9 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.10 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -5343,6 +5359,9 @@ def render_admin_page(user, config, message=None, error=None):
     content = f"""
     {msg_html}
     
+    <!-- Server Status Dashboard (Always visible) -->
+    {render_status_dashboard(config)}
+    
     <script>
     function toggleEditIframe(index) {{
         var panel = document.getElementById('edit-iframe-' + index);
@@ -5598,7 +5617,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.9 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.10 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -5753,6 +5772,7 @@ def render_admin_page(user, config, message=None, error=None):
     
     <!-- System Panel -->
     <div class="tab-panel" id="panel-system">
+        {render_modern_logs(config)}
         {render_system_section(config)}
     </div>
     """
@@ -7033,14 +7053,389 @@ def render_update_section(config):
     '''
 
 
+def render_status_dashboard(config):
+    """Render a modern status dashboard with server health, Pi info, and alerts."""
+    global server_logger, SERVER_START_TIME, server_alerts
+    
+    sys_info = get_system_info()
+    stats = server_logger.get_stats()
+    alert_stats = server_alerts.get_stats()
+    net_diag = get_network_diagnostics()
+    
+    # Calculate uptime
+    uptime_str = sys_info.get('server_uptime', '0h 0m 0s')
+    
+    # Server health status
+    error_rate = 0
+    total_req = stats.get('total_requests', 0)
+    total_err = stats.get('total_errors', 0)
+    if total_req > 0:
+        error_rate = (total_err / total_req) * 100
+    
+    # Determine overall health
+    if alert_stats['crash_count'] > 0 or error_rate > 10:
+        health_status = 'critical'
+        health_icon = '🔴'
+        health_text = 'Issues Detected'
+        health_color = '#ef4444'
+    elif total_err > 0 or error_rate > 5:
+        health_status = 'warning'
+        health_icon = '🟡'
+        health_text = 'Minor Issues'
+        health_color = '#f59e0b'
+    else:
+        health_status = 'healthy'
+        health_icon = '🟢'
+        health_text = 'All Systems Operational'
+        health_color = '#22c55e'
+    
+    # Raspberry Pi section
+    pi_section = ""
+    pi_info = get_raspberry_pi_info()
+    if pi_info:
+        temp = pi_info.get('temperature', 0)
+        temp_color = '#22c55e' if temp < 60 else '#f59e0b' if temp < 70 else '#ef4444'
+        temp_icon = '🌡️' if temp < 60 else '🔥' if temp < 70 else '🌋'
+        
+        throttle_status = ""
+        if pi_info.get('throttled'):
+            throttle_status = f'''
+            <div style="background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:0.5rem;padding:0.75rem;margin-top:1rem;">
+                <span style="color:#ef4444;font-weight:600;">⚠️ Throttling Active</span>
+                <span style="color:var(--text-secondary);font-size:0.85rem;margin-left:0.5rem;">{escape_html(pi_info.get('throttle_reason', 'Check power supply'))}</span>
+            </div>
+            '''
+        
+        pi_section = f'''
+        <div style="background:linear-gradient(135deg, #c0194820 0%, #c0194810 100%);border:1px solid #c0194840;border-radius:0.75rem;padding:1.25rem;margin-bottom:1.5rem;">
+            <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+                <span style="font-size:1.5rem;">🍓</span>
+                <div>
+                    <div style="font-weight:600;font-size:1.1rem;">Raspberry Pi</div>
+                    <div style="color:var(--text-secondary);font-size:0.85rem;">{escape_html(pi_info.get('model', 'Unknown Model'))}</div>
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(120px, 1fr));gap:1rem;">
+                <div style="background:var(--bg-primary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
+                    <div style="font-size:1.5rem;">{temp_icon}</div>
+                    <div style="font-size:1.25rem;font-weight:700;color:{temp_color};">{temp}°C</div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);">Temperature</div>
+                </div>
+                <div style="background:var(--bg-primary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
+                    <div style="font-size:1.5rem;">💾</div>
+                    <div style="font-size:1.25rem;font-weight:700;">{pi_info.get('memory_percent', 0):.0f}%</div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);">Memory Used</div>
+                </div>
+                <div style="background:var(--bg-primary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
+                    <div style="font-size:1.5rem;">💽</div>
+                    <div style="font-size:1.25rem;font-weight:700;">{pi_info.get('disk_percent', 0):.0f}%</div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);">Disk Used</div>
+                </div>
+                <div style="background:var(--bg-primary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
+                    <div style="font-size:1.5rem;">⚡</div>
+                    <div style="font-size:1.25rem;font-weight:700;">{"OK" if not pi_info.get('throttled') else "!"}</div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);">Power</div>
+                </div>
+            </div>
+            {throttle_status}
+        </div>
+        '''
+    
+    # Health alerts section
+    alerts_section = ""
+    if alert_stats['crash_count'] > 0 or alert_stats['critical_count'] > 0 or alert_stats['error_count'] > 0:
+        recent_alerts = server_alerts.get_alerts(limit=5)
+        alerts_list = ""
+        for alert in recent_alerts:
+            severity_icons = {'critical': '🔴', 'error': '🟠', 'warning': '🟡', 'info': '🔵'}
+            icon = severity_icons.get(alert['severity'], '⚪')
+            time_str = alert['timestamp'][11:19] if len(alert['timestamp']) > 19 else alert['timestamp']
+            count_badge = f'<span style="background:var(--bg-tertiary);padding:0.1rem 0.4rem;border-radius:0.25rem;font-size:0.7rem;margin-left:0.25rem;">×{alert["count"]}</span>' if alert.get('count', 1) > 1 else ''
+            alerts_list += f'''
+            <div style="display:flex;align-items:flex-start;gap:0.5rem;padding:0.5rem 0;border-bottom:1px solid var(--border);">
+                <span>{icon}</span>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-size:0.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{escape_html(alert["message"][:100])}{count_badge}</div>
+                    <div style="font-size:0.7rem;color:var(--text-secondary);">{time_str}</div>
+                </div>
+            </div>
+            '''
+        
+        alerts_section = f'''
+        <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:0.75rem;padding:1rem;margin-bottom:1.5rem;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
+                <div style="display:flex;align-items:center;gap:0.5rem;">
+                    <span style="font-size:1.1rem;">🚨</span>
+                    <span style="font-weight:600;">Health Alerts</span>
+                    {f'<span style="background:#ef4444;color:white;padding:0.15rem 0.5rem;border-radius:1rem;font-size:0.75rem;">{alert_stats["crash_count"]} restart{"s" if alert_stats["crash_count"] != 1 else ""}</span>' if alert_stats["crash_count"] > 0 else ''}
+                </div>
+                <form method="POST" action="/admin/system/clear-alerts">
+                    <button type="submit" class="btn btn-sm btn-secondary" style="font-size:0.75rem;padding:0.25rem 0.5rem;" onclick="return confirm('Clear all alerts?')">Clear</button>
+                </form>
+            </div>
+            <div style="max-height:180px;overflow-y:auto;">
+                {alerts_list}
+            </div>
+        </div>
+        '''
+    
+    return f'''
+    <div class="admin-section" style="margin-bottom:0;">
+        <!-- Server Health Banner -->
+        <div style="background:linear-gradient(135deg, {health_color}15 0%, {health_color}05 100%);border:1px solid {health_color}40;border-radius:0.75rem;padding:1.25rem;margin-bottom:1.5rem;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+                <div style="display:flex;align-items:center;gap:0.75rem;">
+                    <span style="font-size:2rem;">{health_icon}</span>
+                    <div>
+                        <div style="font-size:1.25rem;font-weight:700;">{health_text}</div>
+                        <div style="color:var(--text-secondary);font-size:0.9rem;">Multi-Frames v{VERSION}</div>
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:0.5rem;">
+                    <span style="color:var(--text-secondary);font-size:0.85rem;">Uptime:</span>
+                    <span style="font-family:monospace;font-weight:600;font-size:1.1rem;">{escape_html(uptime_str)}</span>
+                </div>
+            </div>
+        </div>
+        
+        {pi_section}
+        {alerts_section}
+        
+        <!-- Stats Cards -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:1rem;margin-bottom:1.5rem;">
+            <div style="background:var(--bg-secondary);border-radius:0.75rem;padding:1rem;text-align:center;border:1px solid var(--border);">
+                <div style="font-size:1.75rem;">📊</div>
+                <div style="font-size:1.5rem;font-weight:700;margin:0.25rem 0;">{stats.get('total_requests', 0):,}</div>
+                <div style="font-size:0.8rem;color:var(--text-secondary);">Total Requests</div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:0.75rem;padding:1rem;text-align:center;border:1px solid var(--border);">
+                <div style="font-size:1.75rem;">{"✅" if total_err == 0 else "⚠️"}</div>
+                <div style="font-size:1.5rem;font-weight:700;color:{'inherit' if total_err == 0 else '#ef4444'};">{total_err:,}</div>
+                <div style="font-size:0.8rem;color:var(--text-secondary);">Errors</div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:0.75rem;padding:1rem;text-align:center;border:1px solid var(--border);">
+                <div style="font-size:1.75rem;">🧠</div>
+                <div style="font-size:1.5rem;font-weight:700;">{sys_info.get('memory_mb', 'N/A')}</div>
+                <div style="font-size:0.8rem;color:var(--text-secondary);">Memory (MB)</div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:0.75rem;padding:1rem;text-align:center;border:1px solid var(--border);">
+                <div style="font-size:1.75rem;">🌐</div>
+                <div style="font-size:1.1rem;font-weight:700;font-family:monospace;">{escape_html(net_diag.get('local_ip', '?'))}</div>
+                <div style="font-size:0.8rem;color:var(--text-secondary);">IP Address</div>
+            </div>
+        </div>
+        
+        <!-- Quick Info -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:1rem;">
+            <div style="background:var(--bg-secondary);border-radius:0.5rem;padding:0.75rem 1rem;border:1px solid var(--border);">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="color:var(--text-secondary);font-size:0.85rem;">Hostname</span>
+                    <span style="font-family:monospace;font-weight:500;">{escape_html(net_diag.get('hostname', 'Unknown'))}</span>
+                </div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:0.5rem;padding:0.75rem 1rem;border:1px solid var(--border);">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="color:var(--text-secondary);font-size:0.85rem;">Port</span>
+                    <span style="font-family:monospace;font-weight:500;">{sys_info.get('server_port', '?')}</span>
+                </div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:0.5rem;padding:0.75rem 1rem;border:1px solid var(--border);">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="color:var(--text-secondary);font-size:0.85rem;">Python</span>
+                    <span style="font-family:monospace;font-weight:500;">{escape_html(sys_info.get('python_version', '?'))}</span>
+                </div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:0.5rem;padding:0.75rem 1rem;border:1px solid var(--border);">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="color:var(--text-secondary);font-size:0.85rem;">mDNS</span>
+                    <span style="font-weight:500;">{"✓ Active" if sys_info.get('mdns_running') else "✗ Off"}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    '''
+
+
+def render_modern_logs(config):
+    """Render modern tabbed logs viewer."""
+    global server_logger
+    
+    # Get log data
+    recent_logs = server_logger.get_logs(limit=100)
+    recent_requests = server_logger.get_requests(limit=50)
+    recent_errors = server_logger.get_errors(limit=30)
+    stats = server_logger.get_stats()
+    
+    # Build logs HTML
+    logs_html = ""
+    for log in reversed(recent_logs[-50:]):
+        level_styles = {
+            'DEBUG': ('var(--text-secondary)', 'transparent', '○'),
+            'INFO': ('#3b82f6', 'rgba(59,130,246,0.1)', '●'),
+            'WARNING': ('#f59e0b', 'rgba(245,158,11,0.1)', '▲'),
+            'ERROR': ('#ef4444', 'rgba(239,68,68,0.1)', '✕')
+        }
+        color, bg, icon = level_styles.get(log['level'], ('#888', 'transparent', '○'))
+        time_str = log['timestamp'].split(' ')[1] if ' ' in log['timestamp'] else log['timestamp']
+        extra = f' <span style="color:var(--text-secondary);">({log["extra"]})</span>' if log.get('extra') else ''
+        
+        logs_html += f'''
+        <div style="display:flex;align-items:flex-start;gap:0.75rem;padding:0.6rem 0.75rem;border-bottom:1px solid var(--border);background:{bg};">
+            <span style="color:{color};font-size:0.9rem;line-height:1.4;">{icon}</span>
+            <span style="color:var(--text-secondary);font-family:monospace;font-size:0.75rem;min-width:55px;">{time_str[:8]}</span>
+            <span style="flex:1;font-size:0.85rem;line-height:1.4;">{escape_html(log['message'])}{extra}</span>
+        </div>
+        '''
+    if not logs_html:
+        logs_html = '<div style="padding:2rem;text-align:center;color:var(--text-secondary);">No logs recorded yet</div>'
+    
+    # Build requests HTML
+    requests_html = ""
+    for req in reversed(recent_requests[:30]):
+        status = req.get('status', 0)
+        if 200 <= status < 300:
+            status_color, status_bg = '#22c55e', 'rgba(34,197,94,0.1)'
+        elif 300 <= status < 400:
+            status_color, status_bg = '#3b82f6', 'rgba(59,130,246,0.1)'
+        elif status >= 400:
+            status_color, status_bg = '#ef4444', 'rgba(239,68,68,0.1)'
+        else:
+            status_color, status_bg = 'var(--text-secondary)', 'transparent'
+        
+        time_str = req['timestamp'].split(' ')[1] if ' ' in req['timestamp'] else req['timestamp']
+        method_color = '#22c55e' if req['method'] == 'GET' else '#f59e0b'
+        user_badge = f'<span style="background:var(--bg-tertiary);padding:0.1rem 0.4rem;border-radius:0.25rem;font-size:0.7rem;margin-left:0.5rem;">{escape_html(req["user"])}</span>' if req.get('user') else ''
+        
+        requests_html += f'''
+        <div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);font-size:0.8rem;">
+            <span style="color:var(--text-secondary);font-family:monospace;min-width:55px;">{time_str[:8]}</span>
+            <span style="color:{method_color};font-weight:600;min-width:40px;">{req['method']}</span>
+            <span style="background:{status_bg};color:{status_color};padding:0.1rem 0.4rem;border-radius:0.25rem;font-family:monospace;font-size:0.75rem;">{status}</span>
+            <span style="flex:1;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape_html(req['path'])}</span>
+            <span style="color:var(--text-secondary);font-size:0.75rem;">{req.get('duration_ms', 0)}ms</span>
+            <span style="color:var(--text-secondary);font-size:0.75rem;">{escape_html(req.get('client_ip', ''))}</span>
+            {user_badge}
+        </div>
+        '''
+    if not requests_html:
+        requests_html = '<div style="padding:2rem;text-align:center;color:var(--text-secondary);">No requests logged yet</div>'
+    
+    # Build errors HTML
+    errors_html = ""
+    for err in reversed(recent_errors[:20]):
+        time_str = err['timestamp'].split(' ')[1] if ' ' in err['timestamp'] else err['timestamp']
+        errors_html += f'''
+        <div style="padding:0.75rem;border-bottom:1px solid var(--border);background:rgba(239,68,68,0.05);">
+            <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.25rem;">
+                <span style="color:#ef4444;">✕</span>
+                <span style="color:var(--text-secondary);font-family:monospace;font-size:0.75rem;">{time_str[:8]}</span>
+            </div>
+            <div style="font-size:0.85rem;padding-left:1.25rem;">{escape_html(err['message'])}</div>
+        </div>
+        '''
+    if not errors_html:
+        errors_html = '<div style="padding:2rem;text-align:center;color:#22c55e;">✓ No errors recorded</div>'
+    
+    # Stats badges
+    method_stats = stats.get('requests_by_method', {})
+    status_stats = stats.get('status_codes', {})
+    
+    return f'''
+    <div class="admin-section">
+        <h3 style="display:flex;align-items:center;gap:0.5rem;">
+            <span>📋</span> Server Logs
+            <span style="margin-left:auto;display:flex;gap:0.5rem;">
+                <form method="POST" action="/admin/system/clear-logs" style="display:inline;">
+                    <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Clear all logs?')">Clear</button>
+                </form>
+            </span>
+        </h3>
+        
+        <!-- Log Stats Bar -->
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem;padding:0.75rem;background:var(--bg-secondary);border-radius:0.5rem;">
+            <span style="font-size:0.8rem;padding:0.25rem 0.5rem;background:var(--bg-primary);border-radius:0.25rem;">
+                <span style="color:var(--text-secondary);">GET</span> <strong>{method_stats.get('GET', 0)}</strong>
+            </span>
+            <span style="font-size:0.8rem;padding:0.25rem 0.5rem;background:var(--bg-primary);border-radius:0.25rem;">
+                <span style="color:var(--text-secondary);">POST</span> <strong>{method_stats.get('POST', 0)}</strong>
+            </span>
+            <span style="font-size:0.8rem;padding:0.25rem 0.5rem;background:rgba(34,197,94,0.1);border-radius:0.25rem;color:#22c55e;">
+                2xx: <strong>{status_stats.get('200', 0) + status_stats.get('201', 0)}</strong>
+            </span>
+            <span style="font-size:0.8rem;padding:0.25rem 0.5rem;background:rgba(59,130,246,0.1);border-radius:0.25rem;color:#3b82f6;">
+                3xx: <strong>{status_stats.get('302', 0) + status_stats.get('301', 0)}</strong>
+            </span>
+            <span style="font-size:0.8rem;padding:0.25rem 0.5rem;background:rgba(239,68,68,0.1);border-radius:0.25rem;color:#ef4444;">
+                4xx+: <strong>{status_stats.get('401', 0) + status_stats.get('404', 0) + status_stats.get('500', 0)}</strong>
+            </span>
+            
+            <span style="margin-left:auto;display:flex;align-items:center;gap:0.5rem;">
+                <form method="POST" action="/admin/system/log-level" style="display:flex;align-items:center;gap:0.25rem;">
+                    <label style="font-size:0.75rem;color:var(--text-secondary);">Level:</label>
+                    <select name="level" style="padding:0.2rem 0.4rem;font-size:0.8rem;width:auto;">
+                        <option value="DEBUG" {"selected" if server_logger.log_level == "DEBUG" else ""}>DEBUG</option>
+                        <option value="INFO" {"selected" if server_logger.log_level == "INFO" else ""}>INFO</option>
+                        <option value="WARNING" {"selected" if server_logger.log_level == "WARNING" else ""}>WARNING</option>
+                        <option value="ERROR" {"selected" if server_logger.log_level == "ERROR" else ""}>ERROR</option>
+                    </select>
+                    <button type="submit" class="btn btn-sm" style="padding:0.2rem 0.5rem;font-size:0.75rem;">Set</button>
+                </form>
+            </span>
+        </div>
+        
+        <!-- Tabbed Logs -->
+        <div class="logs-tabs">
+            <style>
+            .logs-tabs .tab-buttons {{ display:flex; gap:0.25rem; margin-bottom:-1px; position:relative; z-index:1; }}
+            .logs-tabs .tab-btn {{ padding:0.5rem 1rem; border:1px solid var(--border); border-bottom:none; border-radius:0.5rem 0.5rem 0 0; background:var(--bg-secondary); cursor:pointer; font-size:0.85rem; transition:all 0.2s; }}
+            .logs-tabs .tab-btn:hover {{ background:var(--bg-primary); }}
+            .logs-tabs .tab-btn.active {{ background:var(--bg-primary); border-bottom:1px solid var(--bg-primary); font-weight:600; }}
+            .logs-tabs .tab-content {{ display:none; border:1px solid var(--border); border-radius:0 0.5rem 0.5rem 0.5rem; background:var(--bg-primary); max-height:350px; overflow-y:auto; }}
+            .logs-tabs .tab-content.active {{ display:block; }}
+            </style>
+            
+            <div class="tab-buttons">
+                <button class="tab-btn active" onclick="showLogTab('requests', this)">
+                    🔗 Requests <span style="background:var(--bg-tertiary);padding:0.1rem 0.4rem;border-radius:1rem;font-size:0.7rem;margin-left:0.25rem;">{len(recent_requests)}</span>
+                </button>
+                <button class="tab-btn" onclick="showLogTab('logs', this)">
+                    📜 Logs <span style="background:var(--bg-tertiary);padding:0.1rem 0.4rem;border-radius:1rem;font-size:0.7rem;margin-left:0.25rem;">{len(recent_logs)}</span>
+                </button>
+                <button class="tab-btn" onclick="showLogTab('errors', this)">
+                    ⚠️ Errors <span style="background:{'#ef444420' if recent_errors else 'var(--bg-tertiary)'};color:{'#ef4444' if recent_errors else 'inherit'};padding:0.1rem 0.4rem;border-radius:1rem;font-size:0.7rem;margin-left:0.25rem;">{len(recent_errors)}</span>
+                </button>
+            </div>
+            
+            <div id="log-tab-requests" class="tab-content active">
+                {requests_html}
+            </div>
+            <div id="log-tab-logs" class="tab-content">
+                {logs_html}
+            </div>
+            <div id="log-tab-errors" class="tab-content">
+                {errors_html}
+            </div>
+        </div>
+        
+        <script>
+        function showLogTab(name, btn) {{
+            document.querySelectorAll('.logs-tabs .tab-content').forEach(function(el) {{ el.classList.remove('active'); }});
+            document.querySelectorAll('.logs-tabs .tab-btn').forEach(function(el) {{ el.classList.remove('active'); }});
+            document.getElementById('log-tab-' + name).classList.add('active');
+            btn.classList.add('active');
+        }}
+        </script>
+    </div>
+    '''
+
+
 def render_system_section(config):
-    """Render the system/debug section with logs, stats, and diagnostics."""
+    """Render the system section with diagnostics, connectivity tests, and tools."""
     global server_logger, SERVER_START_TIME
     
     sys_info = get_system_info()
     net_diag = get_network_diagnostics()
     stats = server_logger.get_stats()
-    uptime_str = sys_info.get('server_uptime', 'Not started')
     
     # Check if config file is writable
     config_writable = check_config_writable()
@@ -7056,99 +7451,12 @@ def render_system_section(config):
                 Changes will not be saved.
             </div>
             <div style="margin-top:0.75rem;padding:0.75rem;background:var(--bg-secondary);border-radius:0.25rem;font-family:monospace;font-size:0.85rem;">
-                <span style="color:var(--text-secondary);"># Fix on macOS/Linux:</span><br>
-                chmod 666 {CONFIG_FILE}<br>
-                <span style="color:var(--text-secondary);"># Or change owner:</span><br>
-                sudo chown $USER {CONFIG_FILE}
+                <span style="color:var(--text-secondary);"># Fix:</span> chmod 666 {CONFIG_FILE}
             </div>
         </div>
         '''
     
-    # Server health alerts
-    alert_stats = server_alerts.get_stats()
-    alerts_section = ""
-    if alert_stats['crash_count'] > 0 or alert_stats['critical_count'] > 0 or alert_stats['error_count'] > 0:
-        recent_alerts = server_alerts.get_alerts(limit=10)
-        alerts_html = ""
-        for alert in recent_alerts:
-            severity_colors = {
-                'critical': '#ef4444',
-                'error': '#f97316',
-                'warning': '#f59e0b',
-                'info': '#3b82f6'
-            }
-            color = severity_colors.get(alert['severity'], '#888')
-            count_badge = f' <span style="background:{color};color:white;padding:0.1rem 0.4rem;border-radius:0.25rem;font-size:0.7rem;">×{alert["count"]}</span>' if alert.get('count', 1) > 1 else ''
-            alerts_html += f'''
-            <div style="padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:0.5rem;">
-                <span style="color:{color};font-size:1rem;">{"🔴" if alert["severity"] == "critical" else "🟠" if alert["severity"] == "error" else "🟡" if alert["severity"] == "warning" else "🔵"}</span>
-                <div style="flex:1;">
-                    <div style="font-size:0.8rem;color:var(--text-secondary);">{escape_html(alert["timestamp"][:19])}</div>
-                    <div style="font-size:0.85rem;">{escape_html(alert["message"][:200])}{count_badge}</div>
-                </div>
-            </div>
-            '''
-        
-        crash_badge = f'<span style="background:#ef4444;color:white;padding:0.25rem 0.5rem;border-radius:0.25rem;font-size:0.8rem;margin-left:0.5rem;">🔄 {alert_stats["crash_count"]} restart{"s" if alert_stats["crash_count"] != 1 else ""}</span>' if alert_stats['crash_count'] > 0 else ''
-        
-        alerts_section = f'''
-        <div style="background:rgba(239,68,68,0.1);border:1px solid #ef4444;border-radius:0.5rem;padding:1rem;margin-bottom:1.5rem;">
-            <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;">
-                <span style="font-size:1.25rem;">🚨</span>
-                <span style="font-weight:600;color:#ef4444;">Server Health Alerts</span>
-                {crash_badge}
-            </div>
-            <div style="background:var(--bg-primary);border-radius:var(--radius);max-height:200px;overflow-y:auto;">
-                {alerts_html if alerts_html else '<div style="padding:1rem;color:var(--text-secondary);text-align:center;">No recent alerts</div>'}
-            </div>
-            <div style="margin-top:0.75rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-                <span style="font-size:0.8rem;color:var(--text-secondary);">
-                    Critical: {alert_stats["critical_count"]} • 
-                    Errors: {alert_stats["error_count"]} • 
-                    Warnings: {alert_stats["warning_count"]}
-                </span>
-                <form method="POST" action="/admin/system/clear-alerts" style="margin-left:auto;">
-                    <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Clear all alerts?')">Clear Alerts</button>
-                </form>
-            </div>
-        </div>
-        '''
-    
-    # Recent logs HTML
-    recent_logs = server_logger.get_logs(limit=50)
-    logs_html = ""
-    for log in reversed(recent_logs):
-        level_colors = {'DEBUG': '#888', 'INFO': '#3b82f6', 'WARNING': '#f59e0b', 'ERROR': '#ef4444'}
-        color = level_colors.get(log['level'], '#888')
-        extra = f" | {log['extra']}" if log.get('extra') else ""
-        logs_html += f'<div style="padding:0.4rem 0.6rem;border-bottom:1px solid var(--border);font-family:monospace;font-size:0.8rem;"><span style="color:var(--text-secondary);">{escape_html(log["timestamp"])}</span> <span style="color:{color};font-weight:600;">[{log["level"]}]</span> {escape_html(log["message"])}{escape_html(extra)}</div>'
-    if not logs_html:
-        logs_html = '<div style="padding:1rem;color:var(--text-secondary);text-align:center;">No logs yet</div>'
-    
-    # Recent requests HTML
-    recent_requests = server_logger.get_requests(limit=30)
-    requests_html = ""
-    for req in reversed(recent_requests):
-        status_color = '#22c55e' if 200 <= req['status'] < 300 else '#f59e0b' if 300 <= req['status'] < 400 else '#ef4444'
-        user_str = f" ({req['user']})" if req.get('user') else ""
-        requests_html += f'<div style="padding:0.4rem 0.6rem;border-bottom:1px solid var(--border);font-family:monospace;font-size:0.8rem;display:flex;gap:0.75rem;"><span style="color:var(--text-secondary);min-width:65px;">{escape_html(req["timestamp"].split(" ")[1])}</span><span style="color:#3b82f6;min-width:40px;">{req["method"]}</span><span style="color:{status_color};min-width:25px;">{req["status"]}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{escape_html(req["path"])}</span><span style="color:var(--text-secondary);">{req["duration_ms"]}ms</span><span style="color:var(--text-secondary);">{escape_html(req["client_ip"])}{escape_html(user_str)}</span></div>'
-    if not requests_html:
-        requests_html = '<div style="padding:1rem;color:var(--text-secondary);text-align:center;">No requests logged yet</div>'
-    
-    # Recent errors HTML
-    recent_errors = server_logger.get_errors(limit=20)
-    errors_html = ""
-    for err in reversed(recent_errors):
-        errors_html += f'<div style="padding:0.6rem;border-bottom:1px solid var(--border);background:rgba(239,68,68,0.1);"><span style="color:var(--text-secondary);font-size:0.8rem;">{escape_html(err["timestamp"])}</span><div style="margin-top:0.25rem;">{escape_html(err["message"])}</div></div>'
-    if not errors_html:
-        errors_html = '<div style="padding:1rem;color:var(--text-secondary);text-align:center;">No errors recorded ✓</div>'
-    
-    # Top paths HTML
-    path_stats = stats.get('requests_by_path', {})
-    top_paths = sorted(path_stats.items(), key=lambda x: x[1], reverse=True)[:10]
-    paths_html = "".join([f'<div style="display:flex;justify-content:space-between;padding:0.3rem 0;border-bottom:1px solid var(--border);"><span style="font-family:monospace;font-size:0.85rem;">{escape_html(p)}</span><span style="color:var(--text-secondary);">{c}</span></div>' for p, c in top_paths]) or '<div style="color:var(--text-secondary);">No data yet</div>'
-    
-    # iFrame connectivity test HTML - Enhanced version
+    # iFrame connectivity test HTML
     iframes = config.get('iframes', [])
     iframe_test_html = ""
     for i, iframe in enumerate(iframes):
@@ -7160,45 +7468,32 @@ def render_system_section(config):
         
         if iframe.get('use_embed_code'):
             iframe_test_html += f'''
-            <div class="test-row" style="padding:0.75rem;border-bottom:1px solid var(--border);">
-                <div style="display:flex;align-items:center;gap:0.75rem;">
-                    <span class="status-dot connected"></span>
-                    <span style="flex:1;font-weight:500;">{name}{enabled_badge}</span>
-                    <span style="color:var(--text-secondary);font-size:0.85rem;">📋 Embed Code</span>
-                </div>
-                <div class="test-details" style="margin-top:0.5rem;padding-left:1.5rem;font-size:0.8rem;color:var(--text-secondary);">
-                    Embed code does not require connectivity testing
-                </div>
+            <div style="padding:0.6rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:0.75rem;">
+                <span style="color:#22c55e;">✓</span>
+                <span style="flex:1;font-weight:500;">{name}{enabled_badge}</span>
+                <span style="color:var(--text-secondary);font-size:0.8rem;">📋 Embed Code</span>
             </div>'''
         else:
-            # Parse URL for display
             try:
                 from urllib.parse import urlparse
                 parsed = urlparse(url)
-                protocol = parsed.scheme.upper() or 'HTTP'
                 host = parsed.netloc or url[:30]
                 is_https = parsed.scheme == 'https'
             except:
-                protocol = 'URL'
                 host = url[:30]
                 is_https = False
             
             iframe_test_html += f'''
-            <div class="test-row" id="test-row-{i}" style="padding:0.75rem;border-bottom:1px solid var(--border);">
-                <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
-                    <span class="status-dot" id="test-{i}">●</span>
-                    <span style="flex:1;font-weight:500;min-width:120px;">{name}{enabled_badge}</span>
-                    <span style="font-size:0.75rem;padding:0.15rem 0.4rem;background:{'#22c55e20' if is_https else '#f59e0b20'};color:{'#22c55e' if is_https else '#f59e0b'};border-radius:3px;">{'🔒 ' if is_https else ''}{protocol}</span>
-                    <span style="color:var(--text-secondary);font-size:0.8rem;font-family:monospace;max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="{url_escaped}">{escape_html(host)}</span>
-                    <button class="btn btn-sm btn-secondary" data-idx="{i}" data-url="{url_escaped}" data-name="{name}">Test</button>
-                </div>
-                <div class="test-details" id="test-details-{i}" style="margin-top:0.5rem;padding-left:1.5rem;font-size:0.8rem;display:none;">
-                    <div class="test-result-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0.5rem;"></div>
-                </div>
+            <div style="padding:0.6rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                <span class="status-dot" id="test-{i}" style="color:var(--text-secondary);">●</span>
+                <span style="flex:1;font-weight:500;min-width:100px;">{name}{enabled_badge}</span>
+                <span style="font-size:0.7rem;padding:0.15rem 0.35rem;background:{'rgba(34,197,94,0.1)' if is_https else 'rgba(245,158,11,0.1)'};color:{'#22c55e' if is_https else '#f59e0b'};border-radius:3px;">{'🔒' if is_https else '⚠️'}</span>
+                <span style="color:var(--text-secondary);font-size:0.75rem;font-family:monospace;">{escape_html(host[:25])}</span>
+                <button class="btn btn-sm btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.75rem;" onclick="testUrl({i},'{url_escaped}','{name}')">Test</button>
             </div>'''
     
     if not iframe_test_html:
-        iframe_test_html = '<div style="padding:1rem;color:var(--text-secondary);text-align:center;">No iFrames configured</div>'
+        iframe_test_html = '<div style="padding:1rem;text-align:center;color:var(--text-secondary);">No iFrames configured</div>'
     
     # Config export (sanitized)
     safe_config = json.loads(json.dumps(config))
@@ -7206,461 +7501,137 @@ def render_system_section(config):
     if 'sessions' in safe_config: safe_config['sessions'] = {}
     config_json = json.dumps(safe_config, indent=2)
     
-    method_stats = stats.get('requests_by_method', {})
-    status_stats = stats.get('status_codes', {})
-    
     return f'''
+    {config_warning}
+    
+    <!-- Connectivity Testing -->
     <div class="admin-section">
-        <h3>🔧 System & Diagnostics</h3>
-        {config_warning}
-        {alerts_section}
+        <h3 style="display:flex;align-items:center;gap:0.5rem;">
+            <span>🧪</span> Connectivity Testing
+        </h3>
         <div class="admin-content">
-            <div class="admin-subsection">
-                <h4>📊 Server Status</h4>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:1rem;">
-                    <div style="background:var(--bg-primary);padding:1rem;border-radius:var(--radius);"><div style="color:var(--text-secondary);font-size:0.8rem;">Uptime</div><div style="font-size:1.2rem;font-weight:600;">{escape_html(uptime_str)}</div></div>
-                    <div style="background:var(--bg-primary);padding:1rem;border-radius:var(--radius);"><div style="color:var(--text-secondary);font-size:0.8rem;">Total Requests</div><div style="font-size:1.2rem;font-weight:600;">{stats.get("total_requests", 0):,}</div></div>
-                    <div style="background:var(--bg-primary);padding:1rem;border-radius:var(--radius);"><div style="color:var(--text-secondary);font-size:0.8rem;">Errors</div><div style="font-size:1.2rem;font-weight:600;color:{"var(--danger)" if stats.get("total_errors", 0) > 0 else "inherit"};">{stats.get("total_errors", 0):,}</div></div>
-                    <div style="background:var(--bg-primary);padding:1rem;border-radius:var(--radius);"><div style="color:var(--text-secondary);font-size:0.8rem;">Memory</div><div style="font-size:1.2rem;font-weight:600;">{sys_info.get("memory_mb", "N/A")} MB</div></div>
-                </div>
-                <div style="margin-top:1rem;display:flex;flex-wrap:wrap;gap:0.5rem;">
-                    <span style="background:var(--bg-primary);padding:0.5rem 0.75rem;border-radius:var(--radius);font-size:0.85rem;"><span style="color:var(--text-secondary);">GET:</span> {method_stats.get("GET", 0)}</span>
-                    <span style="background:var(--bg-primary);padding:0.5rem 0.75rem;border-radius:var(--radius);font-size:0.85rem;"><span style="color:var(--text-secondary);">POST:</span> {method_stats.get("POST", 0)}</span>
-                    <span style="background:var(--bg-primary);padding:0.5rem 0.75rem;border-radius:var(--radius);font-size:0.85rem;"><span style="color:var(--text-secondary);">2xx:</span> {status_stats.get("200", 0)}</span>
-                    <span style="background:var(--bg-primary);padding:0.5rem 0.75rem;border-radius:var(--radius);font-size:0.85rem;"><span style="color:var(--text-secondary);">3xx:</span> {status_stats.get("302", 0)}</span>
-                    <span style="background:var(--bg-primary);padding:0.5rem 0.75rem;border-radius:var(--radius);font-size:0.85rem;"><span style="color:var(--text-secondary);">4xx:</span> {status_stats.get("401", 0) + status_stats.get("404", 0)}</span>
-                </div>
+            <div style="background:var(--bg-primary);border-radius:0.5rem;max-height:300px;overflow-y:auto;">
+                {iframe_test_html}
             </div>
             
-            <div class="admin-subsection">
-                <h4>📋 Recent Requests</h4>
-                <div style="background:var(--bg-primary);border-radius:var(--radius);max-height:250px;overflow-y:auto;">{requests_html}</div>
-            </div>
-            
-            <div class="admin-subsection">
-                <h4>📜 Server Logs</h4>
-                <div style="display:flex;gap:0.5rem;margin-bottom:0.75rem;flex-wrap:wrap;align-items:center;">
-                    <form method="POST" action="/admin/system/log-level" style="display:flex;gap:0.5rem;align-items:center;">
-                        <label style="font-size:0.85rem;color:var(--text-secondary);">Level:</label>
-                        <select name="level" style="width:auto;padding:0.4rem;">
-                            <option value="DEBUG" {"selected" if server_logger.log_level == "DEBUG" else ""}>DEBUG</option>
-                            <option value="INFO" {"selected" if server_logger.log_level == "INFO" else ""}>INFO</option>
-                            <option value="WARNING" {"selected" if server_logger.log_level == "WARNING" else ""}>WARNING</option>
-                            <option value="ERROR" {"selected" if server_logger.log_level == "ERROR" else ""}>ERROR</option>
-                        </select>
-                        <button type="submit" class="btn btn-sm">Set</button>
-                    </form>
-                    <form method="POST" action="/admin/system/clear-logs" style="margin-left:auto;"><button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Clear all logs?')">Clear Logs</button></form>
-                </div>
-                <div style="background:var(--bg-primary);border-radius:var(--radius);max-height:250px;overflow-y:auto;">{logs_html}</div>
-            </div>
-            
-            <div class="admin-subsection">
-                <h4>⚠️ Recent Errors</h4>
-                <div style="background:var(--bg-primary);border-radius:var(--radius);max-height:150px;overflow-y:auto;">{errors_html}</div>
-            </div>
-            
-            <div class="admin-subsection">
-                <h4>🔗 Top Paths</h4>
-                <div style="background:var(--bg-primary);padding:0.75rem;border-radius:var(--radius);">{paths_html}</div>
-            </div>
-            
-            <div class="admin-subsection">
-                <h4>🧪 iFrame Connectivity Test</h4>
-                <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem;">
-                    Test network connectivity and response times for configured iFrames.
-                </p>
-                <div style="background:var(--bg-primary);padding:0.5rem;border-radius:var(--radius);max-height:400px;overflow-y:auto;">{iframe_test_html}</div>
+            <script>
+            function testUrl(idx, url, name) {{
+                var dot = document.getElementById('test-' + idx);
+                if (!dot) return;
+                dot.style.color = '#f59e0b';
+                dot.textContent = '◐';
                 
-                <style>
-                .test-metric {{
-                    background: var(--bg-secondary);
-                    padding: 0.4rem 0.6rem;
-                    border-radius: 4px;
-                    display: flex;
-                    flex-direction: column;
-                }}
-                .test-metric-label {{
-                    font-size: 0.7rem;
-                    color: var(--text-secondary);
-                    text-transform: uppercase;
-                }}
-                .test-metric-value {{
-                    font-family: monospace;
-                    font-size: 0.85rem;
-                }}
-                .test-metric-value.good {{ color: #22c55e; }}
-                .test-metric-value.warning {{ color: #f59e0b; }}
-                .test-metric-value.error {{ color: #ef4444; }}
-                </style>
+                var start = performance.now();
+                var f = document.createElement('iframe');
+                f.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;';
+                var done = false;
                 
-                <script>
-                var testResults = {{}};
-                
-                function testUrl(idx, url, name) {{
-                    var dot = document.getElementById('test-' + idx);
-                    var details = document.getElementById('test-details-' + idx);
-                    var grid = details ? details.querySelector('.test-result-grid') : null;
-                    if (!dot) return;
-                    
-                    // Reset
-                    dot.className = 'status-dot loading';
-                    dot.textContent = '●';
-                    if (details) details.style.display = 'block';
-                    if (grid) grid.innerHTML = '<div style="color:var(--text-secondary);grid-column:1/-1;">Testing...</div>';
-                    
-                    var startTime = performance.now();
-                    var results = {{
-                        url: url,
-                        name: name,
-                        startTime: new Date().toISOString(),
-                        loadTime: null,
-                        status: 'testing',
-                        method: 'iframe'
-                    }};
-                    
-                    // Method 1: Try fetch first for more details (may fail due to CORS)
-                    var fetchTimeout = setTimeout(function() {{}}, 0);
-                    
-                    fetch(url, {{ method: 'HEAD', mode: 'no-cors', cache: 'no-store' }})
-                        .then(function(response) {{
-                            results.fetchTime = Math.round(performance.now() - startTime);
-                            results.fetchStatus = response.type === 'opaque' ? 'CORS blocked' : response.status;
-                        }})
-                        .catch(function(e) {{
-                            results.fetchError = e.message;
-                        }});
-                    
-                    // Method 2: iframe load test (primary method)
-                    var f = document.createElement('iframe');
-                    f.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
-                    var done = false;
-                    
-                    function finish(success, extra) {{
-                        if (done) return;
-                        done = true;
-                        results.loadTime = Math.round(performance.now() - startTime);
-                        results.status = success ? 'success' : 'failed';
-                        results.extra = extra || '';
-                        
-                        dot.className = 'status-dot ' + (success ? 'connected' : 'error');
-                        dot.textContent = success ? '✓' : '✗';
-                        
-                        if (grid) {{
-                            var loadClass = results.loadTime < 1000 ? 'good' : (results.loadTime < 3000 ? 'warning' : 'error');
-                            grid.innerHTML = `
-                                <div class="test-metric">
-                                    <span class="test-metric-label">Status</span>
-                                    <span class="test-metric-value ${{success ? 'good' : 'error'}}">${{success ? '✓ Reachable' : '✗ Failed'}}</span>
-                                </div>
-                                <div class="test-metric">
-                                    <span class="test-metric-label">Load Time</span>
-                                    <span class="test-metric-value ${{loadClass}}">${{results.loadTime}} ms</span>
-                                </div>
-                                <div class="test-metric">
-                                    <span class="test-metric-label">Protocol</span>
-                                    <span class="test-metric-value">${{url.startsWith('https') ? '🔒 HTTPS' : 'HTTP'}}</span>
-                                </div>
-                                <div class="test-metric">
-                                    <span class="test-metric-label">Fetch Check</span>
-                                    <span class="test-metric-value">${{results.fetchTime ? results.fetchTime + ' ms' : (results.fetchError || 'N/A')}}</span>
-                                </div>
-                            `;
-                            if (extra) {{
-                                grid.innerHTML += `<div style="grid-column:1/-1;color:var(--text-secondary);font-size:0.75rem;margin-top:0.25rem;">${{extra}}</div>`;
-                            }}
-                        }}
-                        
-                        testResults[idx] = results;
-                        try {{ document.body.removeChild(f); }} catch(e) {{}}
-                    }}
-                    
-                    f.onload = function() {{ finish(true); }};
-                    f.onerror = function() {{ finish(false, 'Load error or blocked'); }};
-                    
-                    // Timeout after 10 seconds
-                    setTimeout(function() {{
-                        if (!done) finish(false, 'Timeout after 10s');
-                    }}, 10000);
-                    
-                    f.src = url;
-                    document.body.appendChild(f);
+                function finish(ok) {{
+                    if (done) return;
+                    done = true;
+                    var ms = Math.round(performance.now() - start);
+                    dot.style.color = ok ? '#22c55e' : '#ef4444';
+                    dot.textContent = ok ? '✓' : '✗';
+                    dot.title = (ok ? 'OK' : 'Failed') + ' (' + ms + 'ms)';
+                    try {{ document.body.removeChild(f); }} catch(e) {{}}
                 }}
                 
-                // Bind click handlers
-                document.querySelectorAll('[data-idx]').forEach(function(btn) {{
-                    btn.onclick = function() {{
-                        testUrl(this.dataset.idx, this.dataset.url, this.dataset.name || 'Unknown');
-                    }};
+                f.onload = function() {{ finish(true); }};
+                f.onerror = function() {{ finish(false); }};
+                setTimeout(function() {{ finish(false); }}, 8000);
+                
+                document.body.appendChild(f);
+                f.src = url;
+            }}
+            
+            function testAllFrames() {{
+                document.querySelectorAll('[id^="test-"]').forEach(function(dot, i) {{
+                    var btn = dot.parentElement.querySelector('button');
+                    if (btn) setTimeout(function() {{ btn.click(); }}, i * 200);
                 }});
-                
-                function testAllFrames() {{
-                    var btns = document.querySelectorAll('[data-idx]');
-                    var total = btns.length;
-                    var current = 0;
-                    
-                    function runNext() {{
-                        if (current < total) {{
-                            btns[current].click();
-                            current++;
-                            setTimeout(runNext, 800);
-                        }} else {{
-                            setTimeout(showSummary, 1500);
-                        }}
-                    }}
-                    runNext();
-                }}
-                
-                function showSummary() {{
-                    var keys = Object.keys(testResults);
-                    if (keys.length === 0) return;
-                    
-                    var passed = 0, failed = 0, totalTime = 0;
-                    keys.forEach(function(k) {{
-                        if (testResults[k].status === 'success') passed++;
-                        else failed++;
-                        totalTime += testResults[k].loadTime || 0;
-                    }});
-                    
-                    var avgTime = Math.round(totalTime / keys.length);
-                    var summary = document.getElementById('test-summary');
-                    if (summary) {{
-                        summary.innerHTML = `
-                            <span style="color:#22c55e;">✓ ${{passed}} passed</span> · 
-                            <span style="color:${{failed > 0 ? '#ef4444' : 'var(--text-secondary)'}};">${{failed > 0 ? '✗ ' : ''}}${{failed}} failed</span> · 
-                            <span>Avg: ${{avgTime}} ms</span>
-                        `;
-                        summary.style.display = 'block';
-                    }}
-                }}
-                
-                function runServerTest() {{
-                    var btn = document.getElementById('server-test-btn');
-                    var output = document.getElementById('server-test-output');
-                    if (btn) btn.disabled = true;
-                    if (output) {{
-                        output.style.display = 'block';
-                        output.innerHTML = '<div style="padding:1rem;color:var(--text-secondary);text-align:center;">Running server-side tests...</div>';
-                    }}
-                    
-                    fetch('/admin/system/connectivity-test', {{ method: 'POST' }})
-                        .then(function(r) {{ return r.json(); }})
-                        .then(function(data) {{
-                            if (output && data.results) {{
-                                var html = '<div style="padding:0.5rem;border-bottom:1px solid var(--border);font-weight:600;display:grid;grid-template-columns:1fr 80px 100px 120px;gap:0.5rem;font-size:0.75rem;color:var(--text-secondary);">' +
-                                    '<span>Name</span><span>Status</span><span>Time</span><span>Details</span></div>';
-                                
-                                var passed = 0, failed = 0;
-                                data.results.forEach(function(r) {{
-                                    var statusIcon, statusColor;
-                                    if (r.status === 'success') {{
-                                        statusIcon = '✓ OK';
-                                        statusColor = '#22c55e';
-                                        passed++;
-                                    }} else if (r.status === 'skip') {{
-                                        statusIcon = '○ Skip';
-                                        statusColor = 'var(--text-secondary)';
-                                    }} else if (r.status === 'warning') {{
-                                        statusIcon = '⚠ ' + (r.http_status || 'Warn');
-                                        statusColor = '#f59e0b';
-                                        failed++;
-                                    }} else {{
-                                        statusIcon = '✗ Fail';
-                                        statusColor = '#ef4444';
-                                        failed++;
-                                    }}
-                                    
-                                    var details = r.x_frame_options || r.error || r.message || '';
-                                    if (r.http_status && r.status === 'success') {{
-                                        details = 'HTTP ' + r.http_status;
-                                        if (r.x_frame_options && r.x_frame_options !== 'Not set') {{
-                                            details += ' · X-Frame: ' + r.x_frame_options;
-                                        }}
-                                    }}
-                                    
-                                    html += '<div style="padding:0.5rem;border-bottom:1px solid var(--border);display:grid;grid-template-columns:1fr 80px 100px 120px;gap:0.5rem;align-items:center;">' +
-                                        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + (r.url || '') + '">' + r.name + '</span>' +
-                                        '<span style="color:' + statusColor + ';font-weight:500;">' + statusIcon + '</span>' +
-                                        '<span style="font-family:monospace;font-size:0.8rem;">' + (r.response_time || '—') + '</span>' +
-                                        '<span style="font-size:0.75rem;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + details + '">' + details + '</span>' +
-                                    '</div>';
-                                }});
-                                
-                                html += '<div style="padding:0.75rem;background:var(--bg-secondary);display:flex;justify-content:space-between;align-items:center;">' +
-                                    '<span>Total: ' + data.total + ' iFrames</span>' +
-                                    '<span><span style="color:#22c55e;">✓ ' + passed + ' passed</span> · <span style="color:' + (failed > 0 ? '#ef4444' : 'var(--text-secondary)') + ';">' + (failed > 0 ? '✗ ' : '') + failed + ' failed</span></span>' +
-                                '</div>';
-                                
-                                output.innerHTML = html;
-                            }}
-                        }})
-                        .catch(function(e) {{
-                            if (output) output.innerHTML = '<div style="padding:1rem;color:var(--danger);">Error: ' + e.message + '</div>';
-                        }})
-                        .finally(function() {{
-                            if (btn) btn.disabled = false;
-                        }});
-                }}
-                </script>
-                
-                <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
-                    <button class="btn btn-secondary btn-sm" onclick="testAllFrames()">🧪 Test All (Browser)</button>
-                    <button class="btn btn-secondary btn-sm" id="server-test-btn" onclick="runServerTest()">🖥️ Test All (Server)</button>
-                    <div id="test-summary" style="display:none;margin-left:auto;font-size:0.85rem;padding:0.4rem 0.75rem;background:var(--bg-primary);border-radius:var(--radius);"></div>
-                </div>
-                
-                <div id="server-test-output" style="margin-top:0.75rem;background:var(--bg-primary);border-radius:var(--radius);font-size:0.85rem;max-height:200px;overflow-y:auto;display:none;"></div>
-            </div>
+            }}
+            </script>
             
-            {render_connectivity_reports(config)}
+            <div style="margin-top:0.75rem;">
+                <button class="btn btn-secondary btn-sm" onclick="testAllFrames()">🧪 Test All</button>
+            </div>
         </div>
     </div>
     
+    <!-- Updates & Firmware -->
     <div class="admin-section">
-        <h3>🖥️ System Information</h3>
+        <h3 style="display:flex;align-items:center;gap:0.5rem;">
+            <span>🔄</span> Updates & Firmware
+        </h3>
         <div class="admin-content">
-            {render_raspberry_pi_section()}
-            
-            <div class="admin-subsection">
-                <h4>🐍 Runtime</h4>
-                <table style="width:100%;font-size:0.85rem;">
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);width:40%;">Firmware Version</td><td style="font-family:monospace;"><strong>{VERSION}</strong> <span style="color:var(--text-secondary);">({VERSION_DATE})</span></td></tr>
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);">Python</td><td style="font-family:monospace;">{escape_html(sys_info.get("python_version", "Unknown"))}</td></tr>
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);">Platform</td><td style="font-family:monospace;">{escape_html(sys_info.get("platform", "Unknown"))}</td></tr>
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);">Server Port</td><td style="font-family:monospace;">{sys_info.get("server_port", "Unknown")}</td></tr>
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);">Config File</td><td style="font-family:monospace;">{escape_html(sys_info.get("config_file", "Unknown"))}</td></tr>
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);">Script Location</td><td style="font-family:monospace;font-size:0.75rem;word-break:break-all;">{escape_html(os.path.abspath(__file__))}</td></tr>
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);">Zeroconf</td><td>{"✓ Available" if sys_info.get("zeroconf_available") else "✗ Not installed"}</td></tr>
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);">mDNS Active</td><td>{"✓ Running" if sys_info.get("mdns_running") else "✗ Stopped"}</td></tr>
-                </table>
-            </div>
-            
-            <div class="admin-subsection">
-                <h4>🌐 Network</h4>
-                <table style="width:100%;font-size:0.85rem;">
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);width:40%;">Hostname</td><td style="font-family:monospace;">{escape_html(net_diag.get("hostname", "Unknown"))}</td></tr>
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);">Local IP</td><td style="font-family:monospace;">{escape_html(net_diag.get("local_ip", "Unknown"))}</td></tr>
-                    <tr><td style="padding:0.4rem 0;color:var(--text-secondary);">DNS Test</td><td>{"✓ " if net_diag.get("dns_resolution") == "OK" else "✗ "}{net_diag.get("dns_resolution", "Unknown")}</td></tr>
-                </table>
-            </div>
-            
             {render_update_section(config)}
             
-            <div class="admin-subsection">
+            <div class="admin-subsection" style="margin-top:1.5rem;">
                 <h4>⬆️ Manual Firmware Upload</h4>
-                <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem;">
-                    Upload a new version of the server firmware (.py file). A backup will be created automatically.
-                </p>
-                <form method="POST" action="/admin/system/firmware-upload" enctype="multipart/form-data" id="firmware-form">
+                <form method="POST" action="/admin/system/firmware-upload" enctype="multipart/form-data">
                     <div style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap;">
                         <div class="form-group" style="flex:1;min-width:200px;margin-bottom:0;">
-                            <label for="firmware-file">Firmware File (.py)</label>
-                            <input type="file" id="firmware-file" name="firmware" accept=".py" required style="padding:0.4rem;">
+                            <label>Firmware File (.py)</label>
+                            <input type="file" name="firmware" accept=".py" required style="padding:0.4rem;">
                         </div>
-                        <button type="submit" class="btn" onclick="return confirmFirmwareUpload()">
-                            ⬆️ Upload & Install
-                        </button>
+                        <button type="submit" class="btn" onclick="return confirm('Upload and install firmware?')">⬆️ Upload</button>
                     </div>
                 </form>
-                <div id="firmware-status" style="margin-top:0.75rem;display:none;"></div>
-                
-                <script>
-                function confirmFirmwareUpload() {{
-                    var fileInput = document.getElementById('firmware-file');
-                    if (!fileInput.files.length) {{
-                        alert('Please select a firmware file.');
-                        return false;
-                    }}
-                    var file = fileInput.files[0];
-                    if (!file.name.endsWith('.py')) {{
-                        alert('Please select a Python (.py) file.');
-                        return false;
-                    }}
-                    return confirm(
-                        '⚠️ FIRMWARE UPDATE WARNING\\n\\n' +
-                        'You are about to update the server firmware.\\n\\n' +
-                        'File: ' + file.name + '\\n' +
-                        'Size: ' + (file.size / 1024).toFixed(1) + ' KB\\n\\n' +
-                        'The server will restart after the update.\\n' +
-                        'A backup of the current firmware will be created.\\n\\n' +
-                        'Continue with firmware update?'
-                    );
-                }}
-                </script>
-                
-                <details style="margin-top:1rem;">
-                    <summary style="cursor:pointer;color:var(--text-secondary);font-size:0.85rem;">📁 Backup History</summary>
-                    <div style="margin-top:0.5rem;background:var(--bg-primary);padding:0.75rem;border-radius:var(--radius);font-size:0.8rem;">
+                <details style="margin-top:0.75rem;">
+                    <summary style="cursor:pointer;color:var(--text-secondary);font-size:0.8rem;">📁 Backups</summary>
+                    <div style="margin-top:0.5rem;background:var(--bg-primary);padding:0.5rem;border-radius:0.25rem;font-size:0.8rem;">
                         {render_firmware_backups()}
                     </div>
                 </details>
             </div>
-            
+        </div>
+    </div>
+    
+    <!-- Configuration -->
+    <div class="admin-section">
+        <h3 style="display:flex;align-items:center;gap:0.5rem;">
+            <span>📄</span> Configuration
+        </h3>
+        <div class="admin-content">
             <div class="admin-subsection">
-                <h4>📄 Configuration Export</h4>
-                <textarea readonly style="width:100%;height:150px;font-family:monospace;font-size:0.75rem;background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius);padding:0.5rem;resize:vertical;">{escape_html(config_json)}</textarea>
-                <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
-                    <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText(document.querySelector('textarea[readonly]').value).then(function(){{alert('Copied!')}})">Copy</button>
+                <h4>📤 Export</h4>
+                <textarea readonly style="width:100%;height:120px;font-family:monospace;font-size:0.7rem;background:var(--bg-primary);border:1px solid var(--border);border-radius:0.25rem;padding:0.5rem;resize:vertical;">{escape_html(config_json)}</textarea>
+                <div style="margin-top:0.5rem;display:flex;gap:0.5rem;">
+                    <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText(document.querySelector('textarea[readonly]').value).then(()=>alert('Copied!'))">Copy</button>
                     <form method="POST" action="/admin/system/export-config"><button type="submit" class="btn btn-secondary btn-sm">Download</button></form>
-                    <form method="POST" action="/admin/system/clear-stats" style="margin-left:auto;"><button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Reset stats?')">Reset Stats</button></form>
                 </div>
             </div>
             
-            <div class="admin-subsection">
-                <h4>📥 Configuration Import</h4>
-                <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem;">
-                    Upload a previously exported configuration file (.json) to restore settings.
-                </p>
-                <form method="POST" action="/admin/system/config-upload" enctype="multipart/form-data" id="config-form">
+            <div class="admin-subsection" style="margin-top:1rem;">
+                <h4>📥 Import</h4>
+                <form method="POST" action="/admin/system/config-upload" enctype="multipart/form-data">
                     <div style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap;">
                         <div class="form-group" style="flex:1;min-width:200px;margin-bottom:0;">
-                            <label for="config-file">Config File (.json)</label>
-                            <input type="file" id="config-file" name="config_file" accept=".json" required style="padding:0.4rem;">
+                            <input type="file" name="config_file" accept=".json" required style="padding:0.4rem;">
                         </div>
-                        <button type="submit" class="btn" onclick="return confirmConfigUpload()">
-                            📥 Import Config
-                        </button>
+                        <button type="submit" class="btn" onclick="return confirm('Import this config? Current settings will be overwritten.')">📥 Import</button>
                     </div>
-                    <div style="margin-top:0.75rem;">
-                        <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.85rem;">
-                            <input type="checkbox" name="preserve_users" value="1" checked>
-                            <span>Preserve current users and passwords</span>
-                        </label>
-                    </div>
+                    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.8rem;margin-top:0.5rem;">
+                        <input type="checkbox" name="preserve_users" value="1" checked>
+                        <span>Preserve users</span>
+                    </label>
                 </form>
-                
-                <script>
-                function confirmConfigUpload() {{
-                    var fileInput = document.getElementById('config-file');
-                    if (!fileInput.files.length) {{
-                        alert('Please select a configuration file.');
-                        return false;
-                    }}
-                    var file = fileInput.files[0];
-                    if (!file.name.endsWith('.json')) {{
-                        alert('Please select a JSON (.json) file.');
-                        return false;
-                    }}
-                    return confirm(
-                        '⚠️ CONFIG IMPORT WARNING\\n\\n' +
-                        'You are about to import a configuration file.\\n\\n' +
-                        'File: ' + file.name + '\\n' +
-                        'Size: ' + (file.size / 1024).toFixed(1) + ' KB\\n\\n' +
-                        'This will overwrite your current settings.\\n\\n' +
-                        'Continue with config import?'
-                    );
-                }}
-                </script>
             </div>
-            
-            <div class="admin-subsection">
-                <h4>🔧 Debug Actions</h4>
-                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
-                    <form method="POST" action="/admin/system/test-log"><button type="submit" class="btn btn-secondary btn-sm">Test Log</button></form>
-                    <form method="POST" action="/admin/system/test-error"><button type="submit" class="btn btn-secondary btn-sm">Test Error</button></form>
-                    <form method="POST" action="/admin/system/restart" onsubmit="return confirm('Restart the server now?')"><button type="submit" class="btn btn-secondary btn-sm">🔄 Restart Server</button></form>
-                    <button class="btn btn-secondary btn-sm" onclick="location.reload()">Refresh</button>
-                </div>
+        </div>
+    </div>
+    
+    <!-- Debug Tools -->
+    <div class="admin-section">
+        <h3 style="display:flex;align-items:center;gap:0.5rem;">
+            <span>🔧</span> Debug Tools
+        </h3>
+        <div class="admin-content">
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                <form method="POST" action="/admin/system/test-log"><button type="submit" class="btn btn-secondary btn-sm">Test Log</button></form>
+                <form method="POST" action="/admin/system/test-error"><button type="submit" class="btn btn-secondary btn-sm">Test Error</button></form>
+                <form method="POST" action="/admin/system/clear-stats"><button type="submit" class="btn btn-secondary btn-sm" onclick="return confirm('Reset stats?')">Reset Stats</button></form>
+                <form method="POST" action="/admin/system/restart" onsubmit="return confirm('Restart server?')"><button type="submit" class="btn btn-sm" style="background:#f59e0b;">🔄 Restart</button></form>
+                <button class="btn btn-secondary btn-sm" onclick="location.reload()">Refresh Page</button>
             </div>
         </div>
     </div>
@@ -8651,7 +8622,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.9 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.10 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         
@@ -9577,7 +9548,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME
     
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.9 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.10 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

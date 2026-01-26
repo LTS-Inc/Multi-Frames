@@ -5,11 +5,33 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.10] - 2025-01-26
+
+### Added
+- **Status Dashboard**: Modern health banner at top of admin page showing server status
+- **Server Health Indicator**: Visual 🟢/🟡/🔴 status with uptime display
+- **Raspberry Pi Card**: Dedicated section showing temperature, memory, disk, power status
+- **Modern Logs Viewer**: Tabbed interface with Requests, Logs, and Errors tabs
+- **Stats Cards**: Visual cards for requests, errors, memory, IP address
+- **Quick Info Bar**: Hostname, port, Python version, mDNS status at a glance
+
+### Changed
+- Admin page now shows status dashboard at top (always visible)
+- System panel reorganized into logical sections
+- Logs use color-coded icons and modern styling
+- Connectivity testing simplified with inline status indicators
+- Overall cleaner admin UI with better information hierarchy
+
+### Fixed
+- Removed duplicate code sections in render_system_section
+- Improved code organization and reduced redundancy
+
 ## [1.1.9] - 2025-01-26
 
 ### Added
 - **Git Clone URL Field**: Paste any GitHub URL format to configure updates
   - HTTPS: `https://github.com/owner/repo.git`
+  - HTTPS with auth: `https://user:token@github.com/owner/repo.git`
   - SSH: `git@github.com:owner/repo.git`
   - Short: `github.com/owner/repo` or `owner/repo`
 - **URL Parser**: Automatically extracts owner/repo from pasted URLs
@@ -24,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - NoneType error in `render_update_section` when `last_result` is None
 - Admin page 500 error on fresh installations
+- Authenticated GitHub URLs now parsed correctly
 
 ## [1.1.8] - 2025-01-26
 

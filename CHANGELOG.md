@@ -5,6 +5,31 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.8] - 2025-01-26
+
+### Added - Enhanced Install Script for Raspberry Pi
+- **Kiosk Mode** (`--kiosk`): Auto-start Chromium in fullscreen on boot
+- **Screen Blanking** (`--disable-blanking`): Prevent screen from sleeping
+- **WiFi Fix** (`--fix-wifi`): Disable power management to prevent dropouts
+- **Hostname Setup** (`--hostname NAME`): Set Pi hostname during install
+- **Status Command** (`--status`): Show service status + Pi temp/throttling
+- **Live Logs** (`--logs`): Follow logs in real-time
+- **Auto Dependencies** (`--install-deps`): Install zeroconf and git
+
+### Changed - Systemd Service Improvements
+- Watchdog timer for Pi (5 minute timeout, auto-restart if hung)
+- Memory limits for Pi (256MB max, 192MB high watermark)
+- Security hardening (NoNewPrivileges, ProtectSystem, PrivateTmp)
+- UFW firewall auto-configuration when active
+- Better service restart timing (10s for Pi, 5s for others)
+
+### Technical
+- 717-line install.sh with comprehensive Pi detection
+- X11/LightDM screen blanking disable
+- Chromium kiosk mode with error dialog suppression
+- WiFi power management via systemd service
+- Hostname validation (RFC 1123 compliant)
+
 ## [1.1.7] - 2025-01-26
 
 ### Added

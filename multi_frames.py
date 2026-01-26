@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1.7
+Multi-Frames v1.1.8
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -28,6 +28,20 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.8 (2025-01-26)
+        - Enhanced install.sh optimized for Raspberry Pi
+        - Kiosk mode support (--kiosk flag)
+        - Screen blanking disable option (--disable-blanking)
+        - WiFi power management fix (--fix-wifi)
+        - Hostname configuration during install (--hostname)
+        - Service status command (--status)
+        - Live log viewing (--logs)
+        - Automatic dependency installation (--install-deps)
+        - Systemd watchdog for Pi (5 min timeout)
+        - Memory limits for Pi (256MB max)
+        - Security hardening in systemd service
+        - UFW firewall auto-configuration
+
     v1.1.7 (2025-01-26)
         - Server reliability improvements
         - Auto-restart on crash with exponential backoff
@@ -154,7 +168,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.7"
+VERSION = "1.1.8"
 VERSION_DATE = "2025-01-26"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -1066,7 +1080,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1.7 by LTS, Inc.",
+            "text": "Multi-Frames v1.1.8 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -3347,7 +3361,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.7 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.8 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -5535,7 +5549,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.7 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.8 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -8538,7 +8552,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.7 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.8 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         
@@ -9452,7 +9466,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME
     
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.7 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.8 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1.8
+Multi-Frames v1.1.9
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -28,6 +28,14 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.9 (2025-01-26)
+        - Git clone URL field for easy repository configuration
+        - Auto-parse GitHub URLs (HTTPS, SSH, short formats)
+        - Improved update settings UI with auto-open when unconfigured
+        - Repository configuration status display
+        - Fixed NoneType error in render_update_section
+        - Check for Updates button disabled until configured
+
     v1.1.8 (2025-01-26)
         - Enhanced install.sh optimized for Raspberry Pi
         - Kiosk mode support (--kiosk flag)
@@ -168,7 +176,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.8"
+VERSION = "1.1.9"
 VERSION_DATE = "2025-01-26"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -989,10 +997,51 @@ def get_update_settings(config):
     return config.get('update_settings', {
         'github_owner': '',
         'github_repo': '',
+        'github_url': '',
         'auto_check': False,
         'last_check': None,
         'last_result': None
     })
+
+def parse_git_url(url):
+    """Parse a git clone URL to extract owner and repo name.
+    
+    Supports:
+    - https://github.com/owner/repo.git
+    - https://github.com/owner/repo
+    - git@github.com:owner/repo.git
+    - github.com/owner/repo
+    """
+    if not url:
+        return None, None
+    
+    url = url.strip()
+    
+    # Remove .git suffix
+    if url.endswith('.git'):
+        url = url[:-4]
+    
+    # Handle SSH format: git@github.com:owner/repo
+    ssh_match = re.match(r'git@github\.com:([^/]+)/(.+)', url)
+    if ssh_match:
+        return ssh_match.group(1), ssh_match.group(2)
+    
+    # Handle HTTPS format: https://github.com/owner/repo
+    https_match = re.match(r'https?://github\.com/([^/]+)/([^/]+)/?', url)
+    if https_match:
+        return https_match.group(1), https_match.group(2)
+    
+    # Handle short format: github.com/owner/repo
+    short_match = re.match(r'github\.com/([^/]+)/([^/]+)/?', url)
+    if short_match:
+        return short_match.group(1), short_match.group(2)
+    
+    # Handle owner/repo format directly
+    direct_match = re.match(r'^([^/]+)/([^/]+)$', url)
+    if direct_match:
+        return direct_match.group(1), direct_match.group(2)
+    
+    return None, None
 
 def save_update_settings(config, settings):
     """Save update settings to config."""
@@ -1080,7 +1129,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1.8 by LTS, Inc.",
+            "text": "Multi-Frames v1.1.9 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -3361,7 +3410,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.8 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.9 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -5549,7 +5598,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.8 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.9 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -6791,12 +6840,21 @@ def render_update_section(config):
     # Check if configured
     repo_owner = update_settings.get('github_owner', '').strip()
     repo_name = update_settings.get('github_repo', '').strip()
+    github_url = update_settings.get('github_url', '').strip()
     
     # Try to get from git if not configured
     if not repo_owner and git_info.get('repo_owner'):
         repo_owner = git_info['repo_owner']
     if not repo_name and git_info.get('repo_name'):
         repo_name = git_info['repo_name']
+    
+    # Build display URL
+    if repo_owner and repo_name:
+        display_url = github_url if github_url else f"https://github.com/{repo_owner}/{repo_name}"
+    else:
+        display_url = github_url
+    
+    is_configured = bool(repo_owner and repo_name)
     
     # Git status display
     git_status_html = ""
@@ -6825,7 +6883,10 @@ def render_update_section(config):
         <div style="background:rgba(239,183,0,0.1);border:1px solid #f59e0b;padding:1rem;border-radius:var(--radius);margin-bottom:1rem;">
             <div style="color:#f59e0b;font-weight:600;margin-bottom:0.5rem;">📁 Not a Git Repository</div>
             <div style="color:var(--text-secondary);font-size:0.85rem;">
-                Git pull updates are not available. Use manual firmware upload below, or clone Multi-Frames from GitHub to enable automatic updates.
+                Git pull updates are not available. Clone Multi-Frames from GitHub to enable automatic updates:<br>
+                <code style="background:var(--bg-secondary);padding:0.2rem 0.4rem;border-radius:0.25rem;font-size:0.8rem;margin-top:0.5rem;display:inline-block;">
+                    git clone https://github.com/owner/repo.git
+                </code>
             </div>
         </div>
         '''
@@ -6863,28 +6924,63 @@ def render_update_section(config):
         </div>
         '''
     
-    # Settings form
+    # Configuration status
+    if not is_configured:
+        config_status_html = '''
+        <div style="background:rgba(59,130,246,0.1);border:1px solid #3b82f6;padding:1rem;border-radius:var(--radius);margin-bottom:1rem;">
+            <div style="color:#3b82f6;font-weight:600;margin-bottom:0.5rem;">📋 Configure Repository</div>
+            <div style="color:var(--text-secondary);font-size:0.85rem;">
+                Enter your GitHub repository URL below to enable update checking.
+            </div>
+        </div>
+        '''
+    else:
+        config_status_html = f'''
+        <div style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem;">
+            📦 Repository: <a href="https://github.com/{escape_html(repo_owner)}/{escape_html(repo_name)}" target="_blank" 
+                style="color:var(--primary);font-family:monospace;">{escape_html(repo_owner)}/{escape_html(repo_name)}</a>
+        </div>
+        '''
+    
+    # Settings form - now always visible when not configured
+    form_visible = "open" if not is_configured else ""
+    auto_detected_msg = "✓ Auto-detected from git remote" if git_info.get('repo_owner') and not update_settings.get('github_owner') else ""
+    
     settings_html = f'''
-    <details style="margin-top:1rem;">
-        <summary style="cursor:pointer;color:var(--text-secondary);font-size:0.85rem;">⚙️ Update Settings</summary>
+    <details style="margin-top:1rem;" {form_visible}>
+        <summary style="cursor:pointer;color:var(--text-secondary);font-size:0.85rem;">⚙️ Repository Settings {"(click to configure)" if not is_configured else ""}</summary>
         <div style="margin-top:0.75rem;padding:1rem;background:var(--bg-primary);border-radius:var(--radius);">
             <form method="POST" action="/admin/system/update-settings">
-                <div class="inline-form" style="margin-bottom:1rem;">
-                    <div class="form-group">
-                        <label>GitHub Owner/Org</label>
-                        <input type="text" name="github_owner" value="{escape_html(repo_owner)}" 
-                               placeholder="username or organization" style="font-family:monospace;">
-                    </div>
-                    <div class="form-group">
-                        <label>Repository Name</label>
-                        <input type="text" name="github_repo" value="{escape_html(repo_name)}" 
-                               placeholder="multi-frames" style="font-family:monospace;">
+                <div class="form-group" style="margin-bottom:1rem;">
+                    <label style="font-weight:600;">Git Clone URL</label>
+                    <input type="text" name="github_url" value="{escape_html(display_url)}" 
+                           placeholder="https://github.com/username/multi-frames.git" 
+                           style="font-family:monospace;width:100%;">
+                    <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem;">
+                        Paste your repository URL (HTTPS or SSH format)
                     </div>
                 </div>
+                
+                <details style="margin-bottom:1rem;">
+                    <summary style="cursor:pointer;font-size:0.8rem;color:var(--text-secondary);">Advanced: Manual Owner/Repo</summary>
+                    <div style="margin-top:0.5rem;display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
+                        <div class="form-group">
+                            <label>GitHub Owner/Org</label>
+                            <input type="text" name="github_owner" value="{escape_html(repo_owner)}" 
+                                   placeholder="username" style="font-family:monospace;">
+                        </div>
+                        <div class="form-group">
+                            <label>Repository Name</label>
+                            <input type="text" name="github_repo" value="{escape_html(repo_name)}" 
+                                   placeholder="multi-frames" style="font-family:monospace;">
+                        </div>
+                    </div>
+                </details>
+                
                 <div style="display:flex;gap:0.5rem;align-items:center;">
-                    <button type="submit" class="btn btn-sm">Save Settings</button>
+                    <button type="submit" class="btn btn-sm">💾 Save Settings</button>
                     <span style="color:var(--text-secondary);font-size:0.8rem;margin-left:0.5rem;">
-                        {"✓ Auto-detected from git remote" if git_info.get('repo_owner') and not update_settings.get('github_owner') else ""}
+                        {auto_detected_msg}
                     </span>
                 </div>
             </form>
@@ -6894,6 +6990,7 @@ def render_update_section(config):
     
     # Action buttons
     pull_disabled = "" if git_info['is_git_repo'] and not git_info['has_changes'] else "disabled"
+    check_disabled = "" if is_configured else "disabled"
     pull_tooltip = ""
     if not git_info['is_git_repo']:
         pull_tooltip = "Not a git repository"
@@ -6910,12 +7007,14 @@ def render_update_section(config):
             </div>
         </div>
         
+        {config_status_html}
         {update_status_html}
         {git_status_html}
         
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;">
             <form method="POST" action="/admin/system/check-updates" style="display:inline;">
-                <button type="submit" class="btn btn-secondary" id="check-updates-btn">
+                <button type="submit" class="btn btn-secondary" id="check-updates-btn" {check_disabled}
+                        title="{"Configure repository first" if not is_configured else "Check GitHub for updates"}">
                     🔍 Check for Updates
                 </button>
             </form>
@@ -8552,7 +8651,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.8 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.9 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         
@@ -9104,18 +9203,30 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         
         elif path == '/admin/system/update-settings':
             # Save update settings
+            github_url = data.get('github_url', '').strip()
             github_owner = data.get('github_owner', '').strip()
             github_repo = data.get('github_repo', '').strip()
             
+            # Parse URL if provided
+            if github_url:
+                parsed_owner, parsed_repo = parse_git_url(github_url)
+                if parsed_owner and parsed_repo:
+                    github_owner = parsed_owner
+                    github_repo = parsed_repo
+            
             update_settings = get_update_settings(config)
+            update_settings['github_url'] = github_url
             update_settings['github_owner'] = github_owner
             update_settings['github_repo'] = github_repo
             config['update_settings'] = update_settings
             
             success, err = save_config(config)
             if success:
-                server_logger.info(f"Update settings changed by {user}: {github_owner}/{github_repo}")
-                self.send_html(render_admin_page(user, config, message="Update settings saved"))
+                if github_owner and github_repo:
+                    server_logger.info(f"Update settings changed by {user}: {github_owner}/{github_repo}")
+                    self.send_html(render_admin_page(user, config, message=f"Repository configured: {github_owner}/{github_repo}"))
+                else:
+                    self.send_html(render_admin_page(user, config, error="Could not parse repository URL. Try owner/repo format."))
             else:
                 self.send_html(render_admin_page(user, config, error=err))
         
@@ -9466,7 +9577,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME
     
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.8 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.9 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

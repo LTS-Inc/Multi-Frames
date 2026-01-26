@@ -5,6 +5,26 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.9] - 2025-01-26
+
+### Added
+- **Git Clone URL Field**: Paste any GitHub URL format to configure updates
+  - HTTPS: `https://github.com/owner/repo.git`
+  - SSH: `git@github.com:owner/repo.git`
+  - Short: `github.com/owner/repo` or `owner/repo`
+- **URL Parser**: Automatically extracts owner/repo from pasted URLs
+- **Configuration Status**: Shows "Configure Repository" prompt when not set
+- **Repository Link**: Displays linked GitHub repo when configured
+
+### Changed
+- Update settings form auto-opens when repository not configured
+- "Check for Updates" button disabled until repository is configured
+- Cleaner UI with primary URL field and advanced options collapsed
+
+### Fixed
+- NoneType error in `render_update_section` when `last_result` is None
+- Admin page 500 error on fresh installations
+
 ## [1.1.8] - 2025-01-26
 
 ### Added - Enhanced Install Script for Raspberry Pi

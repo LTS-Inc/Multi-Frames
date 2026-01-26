@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.1.8-2025--01--26-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.1.9-2025--01--26-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -133,12 +133,12 @@ Control network devices directly from your dashboard:
 ```
 ┌────────────────────────────────────────────────────────────┐
 │                                                            │
-│    ┌──────────┐   ┌──────────┐   ┌──────────┐              │
-│    │  Power   │   │  Input   │   │  Volume  │              │
-│    │   On     │   │  HDMI 1  │   │    Up    │              │
-│    └──────────┘   └──────────┘   └──────────┘              │
+│    ┌──────────┐   ┌──────────┐   ┌──────────┐            │
+│    │  Power   │   │  Input   │   │  Volume  │            │
+│    │   On     │   │  HDMI 1  │   │    Up    │            │
+│    └──────────┘   └──────────┘   └──────────┘            │
 │                                                            │
-│    Protocols: TCP  •  UDP  •  Telnet                       │
+│    Protocols: TCP  •  UDP  •  Telnet                      │
 │                                                            │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -239,31 +239,30 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.1.8
+## 🆕 What's New in v1.1.9
 
 <table>
 <tr>
 <td>
 
-### 🍓 Raspberry Pi Install Script
+### 🔗 Easy Repository Setup
 
-- `--kiosk` Auto-start browser fullscreen
-- `--disable-blanking` No screen sleep
-- `--fix-wifi` Prevent WiFi dropouts
-- `--hostname` Set Pi hostname
-- `--status` Show temp/throttling
-- `--logs` Live log viewing
+- Paste any GitHub URL format
+- Auto-parses owner/repo
+- HTTPS, SSH, or short format
+- Settings auto-open when needed
+- Shows linked repo when configured
 
 </td>
 <td>
 
-### 🛡️ Server Reliability
+### 🍓 Raspberry Pi Installer
 
-- Auto-restart on crash (10 attempts)
-- Systemd watchdog (5 min timeout)
-- Memory limits for Pi (256MB)
-- Health alerts in admin panel
-- Security hardening
+- `--kiosk` Auto-start fullscreen
+- `--disable-blanking` No screen sleep
+- `--fix-wifi` Prevent dropouts
+- `--status` Show temp/throttling
+- `--logs` Live log viewing
 
 </td>
 </tr>
@@ -525,6 +524,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.1.9** | 2025-01-26 | Git clone URL field, auto-parse GitHub URLs, improved update UI |
 | **1.1.8** | 2025-01-26 | Enhanced Pi install script, kiosk mode, WiFi fix, screen blanking |
 | **1.1.7** | 2025-01-26 | Auto-restart on crash, server health alerts, reliability improvements |
 | **1.1.6** | 2025-01-26 | GitHub update system, git pull support, version checking |

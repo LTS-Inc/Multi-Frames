@@ -3811,7 +3811,8 @@ def render_help_page(user, config):
     <script>
     var helpTestResults = {{}};
     var helpTestCount = 0;
-    
+    var apiBase = window.location.origin;  // Get correct protocol, host, and port
+
     function helpTestUrl(idx, url, name) {{
         var dot = document.getElementById('help-test-' + idx);
         var timeCell = document.getElementById('help-time-' + idx);
@@ -3825,7 +3826,7 @@ def render_help_page(user, config):
 
         // Use server-side proxy test for accurate HTTP status checking
         // This avoids false positives from iframe.onload firing on error pages
-        fetch('/api/connectivity-test-url', {{
+        fetch(apiBase + '/api/connectivity-test-url', {{
             method: 'POST',
             headers: {{ 'Content-Type': 'application/json' }},
             body: JSON.stringify({{ url: url, index: idx }})
@@ -4076,7 +4077,7 @@ def render_help_page(user, config):
             }});
         }});
         
-        fetch('/api/submit-connectivity-report', {{
+        fetch(apiBase + '/api/submit-connectivity-report', {{
             method: 'POST',
             headers: {{ 'Content-Type': 'application/json' }},
             body: JSON.stringify({{
@@ -7730,6 +7731,8 @@ def render_system_section(config):
             </div>
             
             <script>
+            var apiBase = window.location.origin;  // Get correct protocol, host, and port
+
             function testUrl(idx, url, name) {{
                 var dot = document.getElementById('test-' + idx);
                 if (!dot) return;
@@ -7741,7 +7744,7 @@ def render_system_section(config):
 
                 // Use server-side proxy test for accurate HTTP status checking
                 // This avoids false positives from iframe.onload firing on error pages
-                fetch('/admin/system/connectivity-test-single', {{
+                fetch(apiBase + '/admin/system/connectivity-test-single', {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
                     body: JSON.stringify({{ url: url, index: idx }})

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1.5
+Multi-Frames v1.1.6
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -18,6 +18,7 @@ Features:
 - Session-based authentication
 - Responsive design
 - Raspberry Pi auto-detection and management
+- GitHub integration for firmware updates
 
 Usage:
     python multi_frames.py [--port PORT] [--host HOST]
@@ -26,6 +27,15 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.6 (2025-01-26)
+        - Added firmware update system with GitHub integration
+        - Check for updates from GitHub releases or raw file
+        - Git pull support for automatic updates (when running from git repo)
+        - Update settings configuration (GitHub owner/repo)
+        - Shows git status (branch, commit, changes)
+        - Auto-detection of GitHub repo from git remote
+        - Version comparison with update notifications
+
     v1.1.5 (2025-01-25)
         - Automatic Raspberry Pi detection
         - Pi-specific system info (model, temperature, throttling status)
@@ -131,11 +141,16 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.5"
-VERSION_DATE = "2025-01-25"
+VERSION = "1.1.6"
+VERSION_DATE = "2025-01-26"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
+
+# GitHub repository for updates (user should configure this)
+GITHUB_REPO_OWNER = ""  # e.g., "username"
+GITHUB_REPO_NAME = ""   # e.g., "multi-frames"
+GITHUB_BRANCH = "main"
 
 import http.server
 import socketserver
@@ -149,6 +164,8 @@ import argparse
 import ipaddress
 import base64
 import socket
+import urllib.request
+import urllib.error
 from urllib.parse import parse_qs, urlparse
 from datetime import datetime, timedelta
 from http.cookies import SimpleCookie
@@ -567,6 +584,316 @@ def subnet_to_cidr(subnet):
     except:
         return '24'
 
+# =============================================================================
+# Firmware Update Functions
+# =============================================================================
+
+def get_git_info():
+    """Get information about the current git repository."""
+    info = {
+        'is_git_repo': False,
+        'current_branch': None,
+        'current_commit': None,
+        'commit_short': None,
+        'commit_date': None,
+        'remote_url': None,
+        'has_changes': False,
+        'repo_owner': None,
+        'repo_name': None
+    }
+    
+    # Check if we're in a git repository
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    try:
+        # Check if .git directory exists
+        result = subprocess.run(
+            ['git', 'rev-parse', '--git-dir'],
+            capture_output=True, text=True, timeout=5,
+            cwd=script_dir
+        )
+        if result.returncode != 0:
+            return info
+        
+        info['is_git_repo'] = True
+        
+        # Get current branch
+        result = subprocess.run(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+            capture_output=True, text=True, timeout=5,
+            cwd=script_dir
+        )
+        if result.returncode == 0:
+            info['current_branch'] = result.stdout.strip()
+        
+        # Get current commit hash
+        result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, timeout=5,
+            cwd=script_dir
+        )
+        if result.returncode == 0:
+            info['current_commit'] = result.stdout.strip()
+            info['commit_short'] = info['current_commit'][:7]
+        
+        # Get commit date
+        result = subprocess.run(
+            ['git', 'log', '-1', '--format=%ci'],
+            capture_output=True, text=True, timeout=5,
+            cwd=script_dir
+        )
+        if result.returncode == 0:
+            info['commit_date'] = result.stdout.strip()
+        
+        # Get remote URL
+        result = subprocess.run(
+            ['git', 'remote', 'get-url', 'origin'],
+            capture_output=True, text=True, timeout=5,
+            cwd=script_dir
+        )
+        if result.returncode == 0:
+            remote_url = result.stdout.strip()
+            info['remote_url'] = remote_url
+            
+            # Parse owner/repo from URL
+            # Handles: https://github.com/owner/repo.git or git@github.com:owner/repo.git
+            match = re.search(r'github\.com[:/]([^/]+)/([^/\.]+)', remote_url)
+            if match:
+                info['repo_owner'] = match.group(1)
+                info['repo_name'] = match.group(2).replace('.git', '')
+        
+        # Check for uncommitted changes
+        result = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            capture_output=True, text=True, timeout=5,
+            cwd=script_dir
+        )
+        if result.returncode == 0:
+            info['has_changes'] = bool(result.stdout.strip())
+        
+    except subprocess.TimeoutExpired:
+        pass
+    except FileNotFoundError:
+        # Git not installed
+        pass
+    except Exception as e:
+        info['error'] = str(e)
+    
+    return info
+
+def check_for_updates(config):
+    """
+    Check GitHub for available updates.
+    Returns dict with update info.
+    """
+    result = {
+        'update_available': False,
+        'current_version': VERSION,
+        'latest_version': None,
+        'latest_date': None,
+        'release_notes': None,
+        'error': None,
+        'checked_at': datetime.now().isoformat()
+    }
+    
+    # Get repo info from config or git
+    update_settings = config.get('update_settings', {})
+    repo_owner = update_settings.get('github_owner', '').strip()
+    repo_name = update_settings.get('github_repo', '').strip()
+    
+    # If not configured, try to get from git remote
+    if not repo_owner or not repo_name:
+        git_info = get_git_info()
+        if git_info.get('repo_owner') and git_info.get('repo_name'):
+            repo_owner = git_info['repo_owner']
+            repo_name = git_info['repo_name']
+    
+    if not repo_owner or not repo_name:
+        result['error'] = 'GitHub repository not configured. Set in Admin → System → Update Settings.'
+        return result
+    
+    try:
+        # Try GitHub API first (for releases)
+        api_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/releases/latest"
+        
+        req = urllib.request.Request(api_url, headers={
+            'User-Agent': f'Multi-Frames/{VERSION}',
+            'Accept': 'application/vnd.github.v3+json'
+        })
+        
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                
+                tag_name = data.get('tag_name', '')
+                # Remove 'v' prefix if present
+                latest_version = tag_name.lstrip('v')
+                
+                result['latest_version'] = latest_version
+                result['latest_date'] = data.get('published_at', '')[:10]
+                result['release_notes'] = data.get('body', '')[:500]
+                result['release_url'] = data.get('html_url', '')
+                
+                # Compare versions
+                if latest_version and latest_version != VERSION:
+                    # Simple version comparison
+                    result['update_available'] = is_newer_version(latest_version, VERSION)
+                
+                return result
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                # No releases, try checking raw file
+                pass
+            else:
+                raise
+        
+        # Fallback: Check raw file for VERSION
+        raw_url = f"https://raw.githubusercontent.com/{repo_owner}/{repo_name}/main/multi_frames.py"
+        
+        req = urllib.request.Request(raw_url, headers={
+            'User-Agent': f'Multi-Frames/{VERSION}'
+        })
+        
+        with urllib.request.urlopen(req, timeout=15) as response:
+            # Read first 2KB to find VERSION
+            content = response.read(2048).decode('utf-8', errors='ignore')
+            
+            # Extract VERSION from file
+            version_match = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', content)
+            date_match = re.search(r'VERSION_DATE\s*=\s*["\']([^"\']+)["\']', content)
+            
+            if version_match:
+                latest_version = version_match.group(1)
+                result['latest_version'] = latest_version
+                
+                if date_match:
+                    result['latest_date'] = date_match.group(1)
+                
+                if latest_version != VERSION:
+                    result['update_available'] = is_newer_version(latest_version, VERSION)
+    
+    except urllib.error.URLError as e:
+        result['error'] = f"Network error: {str(e.reason)}"
+    except urllib.error.HTTPError as e:
+        result['error'] = f"HTTP error {e.code}: {e.reason}"
+    except Exception as e:
+        result['error'] = f"Error checking updates: {str(e)}"
+    
+    return result
+
+def is_newer_version(latest, current):
+    """Compare version strings. Returns True if latest > current."""
+    try:
+        def parse_version(v):
+            # Handle versions like "1.1.5" or "1.1.5-beta"
+            parts = re.split(r'[-+]', v)[0]  # Remove pre-release suffix
+            return [int(x) for x in parts.split('.')]
+        
+        latest_parts = parse_version(latest)
+        current_parts = parse_version(current)
+        
+        # Pad with zeros
+        max_len = max(len(latest_parts), len(current_parts))
+        latest_parts.extend([0] * (max_len - len(latest_parts)))
+        current_parts.extend([0] * (max_len - len(current_parts)))
+        
+        return latest_parts > current_parts
+    except:
+        # If parsing fails, do string comparison
+        return latest > current
+
+def perform_git_pull():
+    """
+    Perform git pull to update the firmware.
+    Returns (success, message, details).
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    details = {
+        'before_commit': None,
+        'after_commit': None,
+        'files_changed': [],
+        'output': ''
+    }
+    
+    try:
+        # Check if git repo
+        git_info = get_git_info()
+        if not git_info['is_git_repo']:
+            return False, "Not a git repository. Use firmware upload instead.", details
+        
+        if git_info['has_changes']:
+            return False, "Local changes detected. Commit or stash changes first.", details
+        
+        details['before_commit'] = git_info.get('commit_short')
+        
+        # Perform git fetch first
+        result = subprocess.run(
+            ['git', 'fetch', 'origin'],
+            capture_output=True, text=True, timeout=30,
+            cwd=script_dir
+        )
+        
+        if result.returncode != 0:
+            return False, f"Git fetch failed: {result.stderr}", details
+        
+        # Get current branch
+        branch = git_info.get('current_branch', 'main')
+        
+        # Perform git pull
+        result = subprocess.run(
+            ['git', 'pull', 'origin', branch],
+            capture_output=True, text=True, timeout=60,
+            cwd=script_dir
+        )
+        
+        details['output'] = result.stdout + result.stderr
+        
+        if result.returncode != 0:
+            return False, f"Git pull failed: {result.stderr}", details
+        
+        # Check if already up to date
+        if 'Already up to date' in result.stdout or 'Already up-to-date' in result.stdout:
+            return True, "Already up to date.", details
+        
+        # Get new commit
+        new_git_info = get_git_info()
+        details['after_commit'] = new_git_info.get('commit_short')
+        
+        # Get list of changed files
+        if details['before_commit'] and details['after_commit']:
+            diff_result = subprocess.run(
+                ['git', 'diff', '--name-only', details['before_commit'], details['after_commit']],
+                capture_output=True, text=True, timeout=10,
+                cwd=script_dir
+            )
+            if diff_result.returncode == 0:
+                details['files_changed'] = [f.strip() for f in diff_result.stdout.strip().split('\n') if f.strip()]
+        
+        return True, f"Updated from {details['before_commit']} to {details['after_commit']}", details
+    
+    except subprocess.TimeoutExpired:
+        return False, "Git operation timed out.", details
+    except FileNotFoundError:
+        return False, "Git is not installed on this system.", details
+    except Exception as e:
+        return False, f"Error: {str(e)}", details
+
+def get_update_settings(config):
+    """Get update settings from config."""
+    return config.get('update_settings', {
+        'github_owner': '',
+        'github_repo': '',
+        'auto_check': False,
+        'last_check': None,
+        'last_result': None
+    })
+
+def save_update_settings(config, settings):
+    """Save update settings to config."""
+    config['update_settings'] = settings
+    return save_config(config)
+
 def get_network_diagnostics():
     """Get network diagnostic information."""
     diagnostics = {'hostname': socket.gethostname(), 'local_ip': '127.0.0.1', 'dns_resolution': 'Unknown', 'interfaces': []}
@@ -648,7 +975,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1.5 by LTS, Inc.",
+            "text": "Multi-Frames v1.1.6 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -2929,7 +3256,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.5 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.6 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -5117,7 +5444,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.5 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.6 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -6351,6 +6678,157 @@ def render_raspberry_pi_section():
     '''
 
 
+def render_update_section(config):
+    """Render the firmware update and git pull section."""
+    git_info = get_git_info()
+    update_settings = get_update_settings(config)
+    
+    # Check if configured
+    repo_owner = update_settings.get('github_owner', '').strip()
+    repo_name = update_settings.get('github_repo', '').strip()
+    
+    # Try to get from git if not configured
+    if not repo_owner and git_info.get('repo_owner'):
+        repo_owner = git_info['repo_owner']
+    if not repo_name and git_info.get('repo_name'):
+        repo_name = git_info['repo_name']
+    
+    # Git status display
+    git_status_html = ""
+    if git_info['is_git_repo']:
+        branch_color = "#22c55e" if git_info['current_branch'] in ['main', 'master'] else "#3b82f6"
+        changes_badge = '<span style="color:#f59e0b;margin-left:0.5rem;">⚠ uncommitted changes</span>' if git_info['has_changes'] else ''
+        
+        git_status_html = f'''
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:0.75rem;margin-bottom:1rem;">
+            <div style="background:var(--bg-primary);padding:0.75rem;border-radius:var(--radius);">
+                <div style="color:var(--text-secondary);font-size:0.75rem;">Branch</div>
+                <div style="font-family:monospace;color:{branch_color};">{escape_html(git_info.get('current_branch', 'N/A'))}</div>
+            </div>
+            <div style="background:var(--bg-primary);padding:0.75rem;border-radius:var(--radius);">
+                <div style="color:var(--text-secondary);font-size:0.75rem;">Commit</div>
+                <div style="font-family:monospace;">{escape_html(git_info.get('commit_short', 'N/A'))}</div>
+            </div>
+            <div style="background:var(--bg-primary);padding:0.75rem;border-radius:var(--radius);">
+                <div style="color:var(--text-secondary);font-size:0.75rem;">Status</div>
+                <div>{"⚠️ Changes" if git_info['has_changes'] else "✓ Clean"}</div>
+            </div>
+        </div>
+        '''
+    else:
+        git_status_html = '''
+        <div style="background:rgba(239,183,0,0.1);border:1px solid #f59e0b;padding:1rem;border-radius:var(--radius);margin-bottom:1rem;">
+            <div style="color:#f59e0b;font-weight:600;margin-bottom:0.5rem;">📁 Not a Git Repository</div>
+            <div style="color:var(--text-secondary);font-size:0.85rem;">
+                Git pull updates are not available. Use manual firmware upload below, or clone Multi-Frames from GitHub to enable automatic updates.
+            </div>
+        </div>
+        '''
+    
+    # Update check result display
+    last_check = update_settings.get('last_check')
+    last_result = update_settings.get('last_result', {})
+    
+    update_status_html = ""
+    if last_result.get('update_available'):
+        update_status_html = f'''
+        <div style="background:rgba(34,197,94,0.1);border:1px solid #22c55e;padding:1rem;border-radius:var(--radius);margin-bottom:1rem;">
+            <div style="display:flex;align-items:center;gap:0.5rem;color:#22c55e;font-weight:600;margin-bottom:0.5rem;">
+                <span style="font-size:1.25rem;">🎉</span> Update Available!
+            </div>
+            <div style="color:var(--text-primary);margin-bottom:0.5rem;">
+                <strong>v{escape_html(last_result.get('latest_version', '?'))}</strong>
+                <span style="color:var(--text-secondary);margin-left:0.5rem;">({escape_html(last_result.get('latest_date', ''))})</span>
+            </div>
+            <div style="color:var(--text-secondary);font-size:0.85rem;">
+                Current: v{VERSION}
+            </div>
+        </div>
+        '''
+    elif last_result.get('error'):
+        update_status_html = f'''
+        <div style="background:rgba(239,68,68,0.1);border:1px solid #ef4444;padding:0.75rem;border-radius:var(--radius);margin-bottom:1rem;font-size:0.85rem;color:#ef4444;">
+            ⚠️ {escape_html(last_result.get('error', 'Unknown error'))}
+        </div>
+        '''
+    elif last_check:
+        update_status_html = f'''
+        <div style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem;">
+            ✓ Up to date (checked: {escape_html(last_check[:16] if last_check else 'never')})
+        </div>
+        '''
+    
+    # Settings form
+    settings_html = f'''
+    <details style="margin-top:1rem;">
+        <summary style="cursor:pointer;color:var(--text-secondary);font-size:0.85rem;">⚙️ Update Settings</summary>
+        <div style="margin-top:0.75rem;padding:1rem;background:var(--bg-primary);border-radius:var(--radius);">
+            <form method="POST" action="/admin/system/update-settings">
+                <div class="inline-form" style="margin-bottom:1rem;">
+                    <div class="form-group">
+                        <label>GitHub Owner/Org</label>
+                        <input type="text" name="github_owner" value="{escape_html(repo_owner)}" 
+                               placeholder="username or organization" style="font-family:monospace;">
+                    </div>
+                    <div class="form-group">
+                        <label>Repository Name</label>
+                        <input type="text" name="github_repo" value="{escape_html(repo_name)}" 
+                               placeholder="multi-frames" style="font-family:monospace;">
+                    </div>
+                </div>
+                <div style="display:flex;gap:0.5rem;align-items:center;">
+                    <button type="submit" class="btn btn-sm">Save Settings</button>
+                    <span style="color:var(--text-secondary);font-size:0.8rem;margin-left:0.5rem;">
+                        {"✓ Auto-detected from git remote" if git_info.get('repo_owner') and not update_settings.get('github_owner') else ""}
+                    </span>
+                </div>
+            </form>
+        </div>
+    </details>
+    '''
+    
+    # Action buttons
+    pull_disabled = "" if git_info['is_git_repo'] and not git_info['has_changes'] else "disabled"
+    pull_tooltip = ""
+    if not git_info['is_git_repo']:
+        pull_tooltip = "Not a git repository"
+    elif git_info['has_changes']:
+        pull_tooltip = "Uncommitted changes - commit or stash first"
+    
+    return f'''
+    <div class="admin-subsection">
+        <h4>🔄 Firmware Updates</h4>
+        <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;">
+            <div>
+                <span style="font-size:1.5rem;font-weight:700;">v{VERSION}</span>
+                <span style="color:var(--text-secondary);margin-left:0.5rem;">({VERSION_DATE})</span>
+            </div>
+        </div>
+        
+        {update_status_html}
+        {git_status_html}
+        
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;">
+            <form method="POST" action="/admin/system/check-updates" style="display:inline;">
+                <button type="submit" class="btn btn-secondary" id="check-updates-btn">
+                    🔍 Check for Updates
+                </button>
+            </form>
+            <form method="POST" action="/admin/system/git-pull" style="display:inline;" 
+                  onsubmit="return confirm('This will update Multi-Frames to the latest version from GitHub.\\n\\nThe server will restart after updating.\\n\\nContinue?')">
+                <button type="submit" class="btn" {pull_disabled} title="{pull_tooltip}">
+                    ⬇️ Pull Latest Updates
+                </button>
+            </form>
+        </div>
+        
+        <div id="update-result" style="display:none;margin-bottom:1rem;"></div>
+        
+        {settings_html}
+    </div>
+    '''
+
+
 def render_system_section(config):
     """Render the system/debug section with logs, stats, and diagnostics."""
     global server_logger, SERVER_START_TIME
@@ -6811,8 +7289,10 @@ def render_system_section(config):
                 </table>
             </div>
             
+            {render_update_section(config)}
+            
             <div class="admin-subsection">
-                <h4>⬆️ Firmware Update</h4>
+                <h4>⬆️ Manual Firmware Upload</h4>
                 <p style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:1rem;">
                     Upload a new version of the server firmware (.py file). A backup will be created automatically.
                 </p>
@@ -7857,7 +8337,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.5 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.6 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         
@@ -8382,6 +8862,110 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 server_logger.error(f"Firmware restore error: {str(e)}")
                 self.send_html(render_admin_page(user, config, error=f"Firmware restore failed: {str(e)}"))
         
+        elif path == '/admin/system/check-updates':
+            # Check for updates from GitHub
+            server_logger.info(f"Update check initiated by {user}")
+            
+            result = check_for_updates(config)
+            
+            # Save result to config
+            update_settings = get_update_settings(config)
+            update_settings['last_check'] = result['checked_at']
+            update_settings['last_result'] = result
+            config['update_settings'] = update_settings
+            save_config(config)
+            
+            if result.get('error'):
+                self.send_html(render_admin_page(user, config, error=f"Update check failed: {result['error']}"))
+            elif result.get('update_available'):
+                self.send_html(render_admin_page(user, config, message=f"Update available! v{result['latest_version']} ({result.get('latest_date', 'unknown date')})"))
+            else:
+                self.send_html(render_admin_page(user, config, message=f"You're running the latest version (v{VERSION})"))
+        
+        elif path == '/admin/system/update-settings':
+            # Save update settings
+            github_owner = data.get('github_owner', '').strip()
+            github_repo = data.get('github_repo', '').strip()
+            
+            update_settings = get_update_settings(config)
+            update_settings['github_owner'] = github_owner
+            update_settings['github_repo'] = github_repo
+            config['update_settings'] = update_settings
+            
+            success, err = save_config(config)
+            if success:
+                server_logger.info(f"Update settings changed by {user}: {github_owner}/{github_repo}")
+                self.send_html(render_admin_page(user, config, message="Update settings saved"))
+            else:
+                self.send_html(render_admin_page(user, config, error=err))
+        
+        elif path == '/admin/system/git-pull':
+            # Perform git pull to update firmware
+            server_logger.info(f"Git pull initiated by {user}")
+            
+            success, message, details = perform_git_pull()
+            
+            if not success:
+                self.send_html(render_admin_page(user, config, error=f"Update failed: {message}"))
+                return
+            
+            if 'Already up to date' in message:
+                self.send_html(render_admin_page(user, config, message="Already running the latest version"))
+                return
+            
+            # Update succeeded - show restart page
+            files_list = ""
+            if details.get('files_changed'):
+                files_list = '<div style="margin-top:1rem;text-align:left;max-height:150px;overflow-y:auto;background:var(--bg-secondary);padding:0.75rem;border-radius:var(--radius);font-size:0.8rem;font-family:monospace;">'
+                for f in details['files_changed'][:20]:
+                    files_list += f'<div>{escape_html(f)}</div>'
+                if len(details['files_changed']) > 20:
+                    files_list += f'<div style="color:var(--text-secondary);">... and {len(details["files_changed"]) - 20} more files</div>'
+                files_list += '</div>'
+            
+            restart_html = f'''
+            <div class="card" style="max-width:500px;margin:2rem auto;text-align:center;">
+                <h2>✅ Firmware Updated</h2>
+                <p style="margin:1rem 0;">
+                    {escape_html(message)}
+                </p>
+                {files_list}
+                <p style="margin:1.5rem 0;">
+                    The server will restart in <span id="countdown">3</span> seconds...
+                </p>
+                <div class="status-dot loading" style="margin:1rem auto;"></div>
+                <script>
+                var seconds = 3;
+                var countdown = document.getElementById('countdown');
+                var interval = setInterval(function() {{
+                    seconds--;
+                    if (countdown) countdown.textContent = seconds;
+                    if (seconds <= 0) {{
+                        clearInterval(interval);
+                        setTimeout(function() {{
+                            window.location.href = '/admin';
+                        }}, 3000);
+                    }}
+                }}, 1000);
+                </script>
+                <p style="font-size:0.85rem;color:var(--text-secondary);margin-top:1rem;">
+                    <a href="/admin">Click here</a> if not redirected automatically.
+                </p>
+            </div>
+            '''
+            
+            self.send_html(render_page("Firmware Updated", restart_html, user, config))
+            server_logger.info(f"Git pull successful: {message}")
+            
+            # Schedule restart
+            import threading
+            def restart_server():
+                time_module.sleep(3)
+                server_logger.info("Restarting server after git pull update...")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            
+            threading.Thread(target=restart_server, daemon=True).start()
+        
         elif path == '/admin/system/restart':
             # Manual server restart
             server_logger.info(f"Manual server restart initiated by {user}", extra=user)
@@ -8662,7 +9246,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME
     
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.5 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.6 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

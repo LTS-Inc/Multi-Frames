@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.1.5-2025--01--25-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.1.6-2025--01--26-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -239,10 +239,21 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.1.5
+## 🆕 What's New in v1.1.6
 
 <table>
 <tr>
+<td>
+
+### 🔄 Firmware Updates via GitHub
+
+- Check for updates with one click
+- Pull latest changes from GitHub
+- Auto-detect repo from git remote
+- Shows git branch & commit status
+- Version comparison notifications
+
+</td>
 <td>
 
 ### 🍓 Raspberry Pi Support
@@ -252,19 +263,6 @@ http://localhost:8080
 - Throttling/voltage warnings
 - Change hostname from web UI
 - Reboot/Shutdown controls
-- dhcpcd network configuration
-
-</td>
-<td>
-
-### 🔒 Security & Mobile
-
-- Login rate limiting (5 attempts)
-- 15-minute IP lockout
-- Timing-attack resistant auth
-- Touch-friendly 44px buttons
-- Safe-area-insets for notched phones
-- Admin tabs: icon-only on mobile
 
 </td>
 </tr>
@@ -526,6 +524,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.1.6** | 2025-01-26 | GitHub update system, git pull support, version checking |
 | **1.1.5** | 2025-01-25 | Raspberry Pi auto-detection, temperature monitoring, Pi controls |
 | **1.1.4** | 2025-01-25 | Fixed iframe back button navigation |
 | **1.1.3** | 2025-01-25 | Password change functionality |

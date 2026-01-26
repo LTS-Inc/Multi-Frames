@@ -5,6 +5,29 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.6] - 2025-01-26
+
+### Added
+- **Firmware Update System**: Check for and install updates from GitHub
+- **Check for Updates**: Button to check GitHub releases for new versions
+- **Git Pull Updates**: One-click update when running from a git repository
+- **Update Settings**: Configure GitHub owner/repo for update checks
+- **Git Status Display**: Shows current branch, commit hash, and uncommitted changes
+- **Version Comparison**: Smart comparison determines if update is available
+- **Auto-detection**: Automatically detects GitHub repo from git remote URL
+
+### Changed
+- Reorganized System page with dedicated "Firmware Updates" section
+- Manual firmware upload moved to its own collapsible section
+- Update check results are saved and displayed on page load
+
+### Technical
+- `get_git_info()`: Gets current git repository status
+- `check_for_updates()`: Checks GitHub API for latest release
+- `is_newer_version()`: Compares semantic version strings
+- `perform_git_pull()`: Executes git pull with error handling
+- New POST handlers: `/admin/system/check-updates`, `/admin/system/git-pull`, `/admin/system/update-settings`
+
 ## [1.1.5] - 2025-01-25
 
 ### Added

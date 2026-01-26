@@ -28,6 +28,14 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.11 (2026-01-26)
+        - Added Watchdog tab in admin portal
+        - 30-day server uptime tracking and history
+        - Uptime percentage calculations and visualizations
+        - Persistent uptime data across server restarts
+        - Downtime event logging and tracking
+        - Real-time server health monitoring dashboard
+
     v1.1.10 (2025-01-26)
         - Modern status dashboard at top of admin page
         - Server health banner with uptime and status
@@ -185,8 +193,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.10"
-VERSION_DATE = "2025-01-26"
+VERSION = "1.1.11"
+VERSION_DATE = "2026-01-26"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -385,6 +393,245 @@ server_alerts = ServerAlerts()
 def track_server_alert(alert_type, message, severity='error'):
     """Convenience function to track server alerts."""
     server_alerts.add_alert(alert_type, message, severity)
+
+# =============================================================================
+# Uptime Tracking System (30-day history)
+# =============================================================================
+
+class UptimeTracker:
+    """Track server uptime with 30-day history, persisted to config."""
+
+    MAX_HISTORY_DAYS = 30
+    CHECK_INTERVAL_SECONDS = 60  # Record uptime every minute
+
+    def __init__(self):
+        self.current_session_start = None
+        self.last_check = None
+        self._initialized = False
+
+    def initialize(self, config):
+        """Initialize tracker when server starts."""
+        self.current_session_start = datetime.now()
+        self.last_check = datetime.now()
+        self._initialized = True
+
+        # Record server start event
+        self._record_event(config, 'start', 'Server started')
+
+        # Calculate and record any downtime since last session
+        watchdog_data = config.get('watchdog', {})
+        last_shutdown = watchdog_data.get('last_shutdown')
+        if last_shutdown:
+            try:
+                last_shutdown_dt = datetime.fromisoformat(last_shutdown)
+                downtime_seconds = (self.current_session_start - last_shutdown_dt).total_seconds()
+                if downtime_seconds > 0 and downtime_seconds < 86400 * 30:  # Less than 30 days
+                    self._record_event(config, 'downtime', f'Server was down for {self._format_duration(int(downtime_seconds))}',
+                                      extra={'downtime_seconds': int(downtime_seconds)})
+            except:
+                pass
+
+    def record_shutdown(self, config):
+        """Record graceful shutdown."""
+        if not self._initialized:
+            return
+
+        config.setdefault('watchdog', {})
+        config['watchdog']['last_shutdown'] = datetime.now().isoformat()
+        self._record_event(config, 'stop', 'Server stopped gracefully')
+        self._update_session_uptime(config)
+
+    def record_crash(self, config, error_msg=None):
+        """Record a crash event."""
+        if not self._initialized:
+            return
+        self._record_event(config, 'crash', error_msg or 'Server crashed', severity='critical')
+
+    def periodic_update(self, config):
+        """Called periodically to update uptime stats."""
+        if not self._initialized:
+            return
+
+        now = datetime.now()
+        if self.last_check and (now - self.last_check).total_seconds() >= self.CHECK_INTERVAL_SECONDS:
+            self.last_check = now
+            self._update_session_uptime(config)
+
+    def _update_session_uptime(self, config):
+        """Update the current session's uptime in config."""
+        if not self.current_session_start:
+            return
+
+        config.setdefault('watchdog', {})
+        watchdog = config['watchdog']
+
+        # Update current session info
+        session_duration = int((datetime.now() - self.current_session_start).total_seconds())
+        watchdog['current_session_start'] = self.current_session_start.isoformat()
+        watchdog['current_session_duration'] = session_duration
+        watchdog['last_update'] = datetime.now().isoformat()
+
+        # Update daily uptime tracking
+        today = datetime.now().strftime('%Y-%m-%d')
+        daily_uptime = watchdog.setdefault('daily_uptime', {})
+
+        # Initialize or update today's uptime
+        if today not in daily_uptime:
+            daily_uptime[today] = {'uptime_seconds': 0, 'downtime_seconds': 0, 'crashes': 0, 'restarts': 0}
+
+        # Calculate uptime for today's portion of this session
+        session_start_date = self.current_session_start.strftime('%Y-%m-%d')
+        if session_start_date == today:
+            # Session started today - full duration counts
+            daily_uptime[today]['uptime_seconds'] = session_duration
+        else:
+            # Session started before today - only count from midnight
+            midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_duration = int((datetime.now() - midnight).total_seconds())
+            daily_uptime[today]['uptime_seconds'] = today_duration
+
+        # Cleanup old entries (keep only 30 days)
+        self._cleanup_old_data(watchdog)
+
+    def _record_event(self, config, event_type, message, severity='info', extra=None):
+        """Record a watchdog event."""
+        config.setdefault('watchdog', {})
+        events = config['watchdog'].setdefault('events', [])
+
+        event = {
+            'timestamp': datetime.now().isoformat(),
+            'type': event_type,
+            'message': message[:500],
+            'severity': severity
+        }
+        if extra:
+            event['extra'] = extra
+
+        events.append(event)
+
+        # Keep only last 500 events
+        if len(events) > 500:
+            config['watchdog']['events'] = events[-500:]
+
+        # Update daily stats for crashes/restarts
+        today = datetime.now().strftime('%Y-%m-%d')
+        daily_uptime = config['watchdog'].setdefault('daily_uptime', {})
+        if today not in daily_uptime:
+            daily_uptime[today] = {'uptime_seconds': 0, 'downtime_seconds': 0, 'crashes': 0, 'restarts': 0}
+
+        if event_type == 'crash':
+            daily_uptime[today]['crashes'] = daily_uptime[today].get('crashes', 0) + 1
+        elif event_type == 'start':
+            daily_uptime[today]['restarts'] = daily_uptime[today].get('restarts', 0) + 1
+        elif event_type == 'downtime' and extra:
+            daily_uptime[today]['downtime_seconds'] = daily_uptime[today].get('downtime_seconds', 0) + extra.get('downtime_seconds', 0)
+
+    def _cleanup_old_data(self, watchdog):
+        """Remove data older than MAX_HISTORY_DAYS."""
+        cutoff = (datetime.now() - timedelta(days=self.MAX_HISTORY_DAYS)).strftime('%Y-%m-%d')
+
+        # Cleanup daily uptime
+        daily_uptime = watchdog.get('daily_uptime', {})
+        old_dates = [d for d in daily_uptime if d < cutoff]
+        for d in old_dates:
+            del daily_uptime[d]
+
+        # Cleanup old events
+        events = watchdog.get('events', [])
+        cutoff_dt = datetime.now() - timedelta(days=self.MAX_HISTORY_DAYS)
+        watchdog['events'] = [e for e in events if datetime.fromisoformat(e['timestamp']) > cutoff_dt]
+
+    def get_stats(self, config):
+        """Get comprehensive uptime statistics."""
+        watchdog = config.get('watchdog', {})
+        daily_uptime = watchdog.get('daily_uptime', {})
+        events = watchdog.get('events', [])
+
+        # Calculate totals for the period
+        total_uptime_seconds = 0
+        total_downtime_seconds = 0
+        total_crashes = 0
+        total_restarts = 0
+        days_tracked = 0
+
+        for date, data in daily_uptime.items():
+            total_uptime_seconds += data.get('uptime_seconds', 0)
+            total_downtime_seconds += data.get('downtime_seconds', 0)
+            total_crashes += data.get('crashes', 0)
+            total_restarts += data.get('restarts', 0)
+            days_tracked += 1
+
+        # Calculate uptime percentage
+        total_time = total_uptime_seconds + total_downtime_seconds
+        uptime_percentage = (total_uptime_seconds / total_time * 100) if total_time > 0 else 100.0
+
+        # Current session info
+        current_session_duration = 0
+        if self.current_session_start:
+            current_session_duration = int((datetime.now() - self.current_session_start).total_seconds())
+
+        # Get recent events
+        recent_events = sorted(events, key=lambda x: x['timestamp'], reverse=True)[:20]
+
+        # Last 7 days daily breakdown
+        last_7_days = {}
+        for i in range(7):
+            date = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+            if date in daily_uptime:
+                last_7_days[date] = daily_uptime[date]
+            else:
+                last_7_days[date] = {'uptime_seconds': 0, 'downtime_seconds': 0, 'crashes': 0, 'restarts': 0}
+
+        # Calculate 24h, 7d, 30d uptime percentages
+        def calc_period_uptime(days):
+            up = down = 0
+            for i in range(days):
+                date = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+                if date in daily_uptime:
+                    up += daily_uptime[date].get('uptime_seconds', 0)
+                    down += daily_uptime[date].get('downtime_seconds', 0)
+            total = up + down
+            return (up / total * 100) if total > 0 else 100.0
+
+        return {
+            'current_session_start': self.current_session_start.isoformat() if self.current_session_start else None,
+            'current_session_duration': current_session_duration,
+            'current_session_formatted': self._format_duration(current_session_duration),
+            'total_uptime_seconds': total_uptime_seconds,
+            'total_uptime_formatted': self._format_duration(total_uptime_seconds),
+            'total_downtime_seconds': total_downtime_seconds,
+            'total_downtime_formatted': self._format_duration(total_downtime_seconds),
+            'uptime_percentage': round(uptime_percentage, 3),
+            'uptime_24h': round(calc_period_uptime(1), 3),
+            'uptime_7d': round(calc_period_uptime(7), 3),
+            'uptime_30d': round(calc_period_uptime(30), 3),
+            'total_crashes': total_crashes,
+            'total_restarts': total_restarts,
+            'days_tracked': days_tracked,
+            'recent_events': recent_events,
+            'last_7_days': last_7_days,
+            'daily_uptime': daily_uptime
+        }
+
+    def _format_duration(self, seconds):
+        """Format duration in human readable format."""
+        if seconds < 60:
+            return f"{seconds}s"
+        elif seconds < 3600:
+            mins = seconds // 60
+            secs = seconds % 60
+            return f"{mins}m {secs}s"
+        elif seconds < 86400:
+            hours = seconds // 3600
+            mins = (seconds % 3600) // 60
+            return f"{hours}h {mins}m"
+        else:
+            days = seconds // 86400
+            hours = (seconds % 86400) // 3600
+            return f"{days}d {hours}h"
+
+# Global uptime tracker instance
+uptime_tracker = UptimeTracker()
 
 def get_system_info():
     """Get system information for debugging."""
@@ -5566,6 +5813,9 @@ def render_admin_page(user, config, message=None, error=None):
         <button class="admin-tab" id="tab-settings" onclick="switchTab('settings')" title="Settings">
             <span class="admin-tab-icon">⚙️</span><span class="admin-tab-text">Settings</span>
         </button>
+        <button class="admin-tab" id="tab-watchdog" onclick="switchTab('watchdog')" title="Watchdog">
+            <span class="admin-tab-icon">🐕</span><span class="admin-tab-text">Watchdog</span>
+        </button>
         <button class="admin-tab" id="tab-system" onclick="switchTab('system')" title="System">
             <span class="admin-tab-icon">🔧</span><span class="admin-tab-text">System</span>
         </button>
@@ -5890,7 +6140,12 @@ def render_admin_page(user, config, message=None, error=None):
         </div>
     </div>
     </div>
-    
+
+    <!-- Watchdog Panel -->
+    <div class="tab-panel" id="panel-watchdog">
+        {render_watchdog_section(config)}
+    </div>
+
     <!-- System Panel -->
     <div class="tab-panel" id="panel-system">
         {render_modern_logs(config)}
@@ -7645,6 +7900,274 @@ def render_modern_logs(config):
     '''
 
 
+def render_watchdog_section(config):
+    """Render the watchdog monitoring section with uptime tracking and history."""
+    global uptime_tracker, server_alerts, SERVER_START_TIME
+
+    # Get uptime statistics
+    stats = uptime_tracker.get_stats(config)
+    alert_stats = server_alerts.get_stats()
+
+    # Determine uptime status color and icon
+    uptime_pct = stats['uptime_30d']
+    if uptime_pct >= 99.9:
+        status_color = '#22c55e'
+        status_icon = '🟢'
+        status_text = 'Excellent'
+    elif uptime_pct >= 99.0:
+        status_color = '#84cc16'
+        status_icon = '🟢'
+        status_text = 'Good'
+    elif uptime_pct >= 95.0:
+        status_color = '#f59e0b'
+        status_icon = '🟡'
+        status_text = 'Fair'
+    else:
+        status_color = '#ef4444'
+        status_icon = '🔴'
+        status_text = 'Poor'
+
+    # Build 30-day uptime chart (bar chart visualization)
+    daily_uptime = stats.get('daily_uptime', {})
+    chart_bars = ""
+    for i in range(29, -1, -1):  # Last 30 days, oldest first
+        date = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+        day_data = daily_uptime.get(date, {'uptime_seconds': 0, 'downtime_seconds': 0, 'crashes': 0})
+        day_up = day_data.get('uptime_seconds', 0)
+        day_down = day_data.get('downtime_seconds', 0)
+        day_total = day_up + day_down
+
+        if day_total > 0:
+            day_pct = (day_up / day_total) * 100
+        else:
+            # No data for this day yet
+            day_pct = -1
+
+        # Determine bar color based on uptime percentage
+        if day_pct < 0:
+            bar_color = 'var(--border)'  # No data - gray
+            height = 4
+            tooltip = f'{date}: No data'
+        elif day_pct >= 99.9:
+            bar_color = '#22c55e'
+            height = 100
+            tooltip = f'{date}: {day_pct:.1f}% uptime'
+        elif day_pct >= 99.0:
+            bar_color = '#84cc16'
+            height = int(day_pct)
+            tooltip = f'{date}: {day_pct:.1f}% uptime'
+        elif day_pct >= 95.0:
+            bar_color = '#f59e0b'
+            height = int(day_pct)
+            tooltip = f'{date}: {day_pct:.1f}% uptime'
+        else:
+            bar_color = '#ef4444'
+            height = max(4, int(day_pct))
+            tooltip = f'{date}: {day_pct:.1f}% uptime'
+
+        # Add crash indicator
+        crashes = day_data.get('crashes', 0)
+        crash_indicator = f' ({crashes} crash{"es" if crashes != 1 else ""})' if crashes > 0 else ''
+        tooltip += crash_indicator
+
+        chart_bars += f'''
+        <div class="uptime-bar" title="{tooltip}" style="height:{height}%;background:{bar_color};min-height:4px;"></div>
+        '''
+
+    # Build events list
+    events_html = ""
+    for event in stats.get('recent_events', [])[:15]:
+        event_type = event.get('type', 'unknown')
+        event_icons = {
+            'start': '🚀',
+            'stop': '🛑',
+            'crash': '💥',
+            'downtime': '⏱️'
+        }
+        icon = event_icons.get(event_type, '📌')
+
+        severity = event.get('severity', 'info')
+        severity_colors = {
+            'critical': '#ef4444',
+            'error': '#f59e0b',
+            'warning': '#eab308',
+            'info': 'var(--text-secondary)'
+        }
+        color = severity_colors.get(severity, 'var(--text-secondary)')
+
+        timestamp = event.get('timestamp', '')
+        time_str = timestamp[11:19] if len(timestamp) > 19 else timestamp
+        date_str = timestamp[:10] if len(timestamp) > 10 else ''
+
+        events_html += f'''
+        <div style="display:flex;align-items:flex-start;gap:0.5rem;padding:0.5rem 0;border-bottom:1px solid var(--border);">
+            <span style="font-size:1.1rem;">{icon}</span>
+            <div style="flex:1;min-width:0;">
+                <div style="color:{color};font-size:0.9rem;">{escape_html(event.get('message', '')[:80])}</div>
+                <div style="font-size:0.75rem;color:var(--text-secondary);">{date_str} {time_str}</div>
+            </div>
+        </div>
+        '''
+
+    if not events_html:
+        events_html = '<div style="padding:1rem;text-align:center;color:var(--text-secondary);">No events recorded yet</div>'
+
+    return f'''
+    <style>
+    .uptime-chart {{
+        display:flex;
+        align-items:flex-end;
+        gap:2px;
+        height:60px;
+        padding:0.5rem;
+        background:var(--bg-primary);
+        border-radius:0.5rem;
+    }}
+    .uptime-bar {{
+        flex:1;
+        border-radius:2px 2px 0 0;
+        transition:opacity 0.2s;
+        cursor:pointer;
+    }}
+    .uptime-bar:hover {{
+        opacity:0.8;
+    }}
+    .uptime-stat-card {{
+        background:var(--bg-secondary);
+        border-radius:0.75rem;
+        padding:1.25rem;
+        text-align:center;
+        border:1px solid var(--border);
+    }}
+    .uptime-stat-value {{
+        font-size:2rem;
+        font-weight:700;
+        font-family:monospace;
+    }}
+    .uptime-stat-label {{
+        font-size:0.8rem;
+        color:var(--text-secondary);
+        margin-top:0.25rem;
+    }}
+    </style>
+
+    <div class="admin-section">
+        <h3 style="display:flex;align-items:center;gap:0.5rem;">
+            <span>🐕</span> Server Watchdog
+        </h3>
+        <div class="admin-content">
+            <!-- Status Overview -->
+            <div style="background:linear-gradient(135deg, {status_color}15 0%, {status_color}05 100%);border:1px solid {status_color}40;border-radius:0.75rem;padding:1.5rem;margin-bottom:1.5rem;">
+                <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+                    <div style="display:flex;align-items:center;gap:1rem;">
+                        <span style="font-size:3rem;">{status_icon}</span>
+                        <div>
+                            <div style="font-size:1.5rem;font-weight:700;">{uptime_pct:.3f}% Uptime</div>
+                            <div style="color:var(--text-secondary);">30-Day Average: {status_text}</div>
+                        </div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div style="font-size:0.85rem;color:var(--text-secondary);">Current Session</div>
+                        <div style="font-size:1.5rem;font-weight:700;font-family:monospace;">{escape_html(stats['current_session_formatted'])}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Uptime Stats Cards -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:1rem;margin-bottom:1.5rem;">
+                <div class="uptime-stat-card">
+                    <div class="uptime-stat-value" style="color:{('#22c55e' if stats['uptime_24h'] >= 99 else '#f59e0b' if stats['uptime_24h'] >= 95 else '#ef4444')};">{stats['uptime_24h']:.1f}%</div>
+                    <div class="uptime-stat-label">24 Hour Uptime</div>
+                </div>
+                <div class="uptime-stat-card">
+                    <div class="uptime-stat-value" style="color:{('#22c55e' if stats['uptime_7d'] >= 99 else '#f59e0b' if stats['uptime_7d'] >= 95 else '#ef4444')};">{stats['uptime_7d']:.1f}%</div>
+                    <div class="uptime-stat-label">7 Day Uptime</div>
+                </div>
+                <div class="uptime-stat-card">
+                    <div class="uptime-stat-value" style="color:{('#22c55e' if stats['uptime_30d'] >= 99 else '#f59e0b' if stats['uptime_30d'] >= 95 else '#ef4444')};">{stats['uptime_30d']:.1f}%</div>
+                    <div class="uptime-stat-label">30 Day Uptime</div>
+                </div>
+                <div class="uptime-stat-card">
+                    <div class="uptime-stat-value">{stats['total_crashes']}</div>
+                    <div class="uptime-stat-label">Total Crashes</div>
+                </div>
+            </div>
+
+            <!-- 30-Day Uptime Chart -->
+            <div style="margin-bottom:1.5rem;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                    <h4 style="margin:0;font-size:0.95rem;">30-Day Uptime History</h4>
+                    <span style="font-size:0.75rem;color:var(--text-secondary);">Hover for details</span>
+                </div>
+                <div class="uptime-chart">
+                    {chart_bars}
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--text-secondary);padding:0.25rem 0.5rem;">
+                    <span>30 days ago</span>
+                    <span>Today</span>
+                </div>
+            </div>
+
+            <!-- Detailed Stats -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:1rem;margin-bottom:1.5rem;">
+                <div style="background:var(--bg-secondary);border-radius:0.5rem;padding:1rem;border:1px solid var(--border);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                        <span style="color:var(--text-secondary);font-size:0.85rem;">Total Uptime (30d)</span>
+                        <span style="font-weight:600;font-family:monospace;">{escape_html(stats['total_uptime_formatted'])}</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                        <span style="color:var(--text-secondary);font-size:0.85rem;">Total Downtime (30d)</span>
+                        <span style="font-weight:600;font-family:monospace;color:{'#ef4444' if stats['total_downtime_seconds'] > 0 else 'inherit'};">{escape_html(stats['total_downtime_formatted'])}</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span style="color:var(--text-secondary);font-size:0.85rem;">Days Tracked</span>
+                        <span style="font-weight:600;">{stats['days_tracked']} days</span>
+                    </div>
+                </div>
+                <div style="background:var(--bg-secondary);border-radius:0.5rem;padding:1rem;border:1px solid var(--border);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                        <span style="color:var(--text-secondary);font-size:0.85rem;">Server Restarts</span>
+                        <span style="font-weight:600;">{stats['total_restarts']}</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                        <span style="color:var(--text-secondary);font-size:0.85rem;">Crash Events</span>
+                        <span style="font-weight:600;color:{'#ef4444' if stats['total_crashes'] > 0 else 'inherit'};">{stats['total_crashes']}</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span style="color:var(--text-secondary);font-size:0.85rem;">Alert Count</span>
+                        <span style="font-weight:600;">{alert_stats['total_alerts']}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Events -->
+            <div style="margin-bottom:1rem;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                    <h4 style="margin:0;font-size:0.95rem;">Recent Events</h4>
+                    <form method="POST" action="/admin/watchdog/clear-events">
+                        <button type="submit" class="btn btn-sm btn-secondary" style="font-size:0.75rem;padding:0.25rem 0.5rem;" onclick="return confirm('Clear all watchdog events?')">Clear</button>
+                    </form>
+                </div>
+                <div style="background:var(--bg-primary);border-radius:0.5rem;max-height:250px;overflow-y:auto;">
+                    {events_html}
+                </div>
+            </div>
+
+            <!-- Watchdog Actions -->
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;padding-top:0.5rem;border-top:1px solid var(--border);">
+                <button class="btn btn-secondary btn-sm" onclick="location.reload()">🔄 Refresh Stats</button>
+                <form method="POST" action="/admin/watchdog/test-event" style="display:inline;">
+                    <button type="submit" class="btn btn-secondary btn-sm">🧪 Test Event</button>
+                </form>
+                <form method="POST" action="/admin/watchdog/reset-stats" style="display:inline;">
+                    <button type="submit" class="btn btn-secondary btn-sm" onclick="return confirm('Reset all uptime statistics? This cannot be undone.')">🗑️ Reset All Stats</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    '''
+
+
 def render_system_section(config):
     """Render the system section with diagnostics, connectivity tests, and tools."""
     global server_logger, SERVER_START_TIME
@@ -8076,7 +8599,10 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         user = self.get_session_user()
         config = load_config()
         path = self.path.split('?')[0]
-        
+
+        # Periodic uptime tracking update (updates config every minute)
+        uptime_tracker.periodic_update(config)
+
         if path == '/':
             if user:
                 self.send_html(render_main_page(user, config))
@@ -8186,7 +8712,40 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         elif path == '/api/ping':
             # Simple ping endpoint for connectivity check
             self.send_json({'status': 'ok', 'timestamp': datetime.now().isoformat()})
-        
+
+        elif path == '/api/watchdog':
+            # Watchdog status API endpoint
+            if not user:
+                self.send_json({'error': 'Authentication required'}, 401)
+                return
+
+            # Update uptime stats before returning
+            uptime_tracker.periodic_update(config)
+
+            stats = uptime_tracker.get_stats(config)
+            alert_stats = server_alerts.get_stats()
+
+            self.send_json({
+                'status': 'ok',
+                'uptime': {
+                    'current_session': stats['current_session_formatted'],
+                    'current_session_seconds': stats['current_session_duration'],
+                    'uptime_24h': stats['uptime_24h'],
+                    'uptime_7d': stats['uptime_7d'],
+                    'uptime_30d': stats['uptime_30d'],
+                    'total_uptime': stats['total_uptime_formatted'],
+                    'total_downtime': stats['total_downtime_formatted'],
+                    'days_tracked': stats['days_tracked']
+                },
+                'health': {
+                    'crashes': stats['total_crashes'],
+                    'restarts': stats['total_restarts'],
+                    'alerts': alert_stats['total_alerts']
+                },
+                'recent_events': stats['recent_events'][:10],
+                'daily_uptime': stats['daily_uptime']
+            })
+
         else:
             self.send_html(render_page("Not Found", '<div class="card"><h2>404</h2><p>Page not found.</p></div>', user, config), 404)
     
@@ -9174,7 +9733,38 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             server_alerts.clear()
             server_logger.info("Server alerts cleared", extra=user)
             self.send_html(render_admin_page(user, config, message="Server alerts cleared"))
-        
+
+        # Watchdog endpoints
+        elif path == '/admin/watchdog/clear-events':
+            # Clear all watchdog events
+            if 'watchdog' in config:
+                config['watchdog']['events'] = []
+            save_config(config)
+            server_logger.info("Watchdog events cleared", extra=user)
+            self.send_html(render_admin_page(user, config, message="Watchdog events cleared"))
+
+        elif path == '/admin/watchdog/test-event':
+            # Generate a test event for the watchdog
+            uptime_tracker._record_event(config, 'test', 'Test event generated by admin', severity='info')
+            save_config(config)
+            server_logger.info("Watchdog test event generated", extra=user)
+            self.send_html(render_admin_page(user, config, message="Test event generated"))
+
+        elif path == '/admin/watchdog/reset-stats':
+            # Reset all watchdog statistics
+            config['watchdog'] = {
+                'daily_uptime': {},
+                'events': [],
+                'last_shutdown': None,
+                'current_session_start': uptime_tracker.current_session_start.isoformat() if uptime_tracker.current_session_start else None,
+                'current_session_duration': 0
+            }
+            # Re-record server start
+            uptime_tracker._record_event(config, 'start', 'Statistics reset - new tracking period started')
+            save_config(config)
+            server_logger.info("Watchdog statistics reset", extra=user)
+            self.send_html(render_admin_page(user, config, message="Watchdog statistics reset"))
+
         elif path == '/admin/system/test-log':
             server_logger.debug("Test DEBUG message", extra=user)
             server_logger.info("Test INFO message", extra=user)
@@ -10021,33 +10611,38 @@ def print_shutdown(use_color=True):
 
 
 def main():
-    global SERVER_PORT, SERVER_START_TIME
-    
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.10 - Dashboard & iFrame Display Server by LTS, Inc.')
+    global SERVER_PORT, SERVER_START_TIME, uptime_tracker
+
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.11 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')
     parser.add_argument('--no-auto-restart', action='store_true', help='Disable auto-restart on crash')
     args = parser.parse_args()
-    
+
     # Check color support
     use_color = supports_color() and not args.no_color
-    
+
     # Set global port and start time
     SERVER_PORT = args.port
     SERVER_START_TIME = datetime.now()
-    
+
     # Log startup
     server_logger.info(f"Server starting on {args.host}:{args.port}")
-    
+
     # Ensure config exists
     config = load_config()
-    
+
+    # Initialize uptime tracker with 30-day history
+    uptime_tracker.initialize(config)
+    save_config(config)
+    server_logger.info("Watchdog uptime tracking initialized")
+
     # Start mDNS if enabled
     if config.get("network", {}).get("mdns", {}).get("enabled", False):
         if ZEROCONF_AVAILABLE:
             start_mdns_service(config, args.port)
-    
+
     # Print banner
     print_banner(args, config, use_color)
     
@@ -10067,9 +10662,16 @@ def main():
                 httpd.serve_forever()
                 
         except KeyboardInterrupt:
+            # Record graceful shutdown in uptime tracker
+            try:
+                config = load_config()
+                uptime_tracker.record_shutdown(config)
+                save_config(config)
+            except:
+                pass
             print_shutdown(use_color)
             break
-            
+
         except OSError as e:
             if 'Address already in use' in str(e):
                 print(f"\n{'='*60}")
@@ -10084,7 +10686,15 @@ def main():
             error_msg = str(e)
             server_logger.error(f"Server crashed: {error_msg}")
             server_alerts.record_crash(error_msg)
-            
+
+            # Record crash in uptime tracker
+            try:
+                config = load_config()
+                uptime_tracker.record_crash(config, error_msg)
+                save_config(config)
+            except:
+                pass
+
             if args.no_auto_restart:
                 print(f"\n{'='*60}")
                 print(f"SERVER CRASHED: {error_msg}")

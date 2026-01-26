@@ -2376,6 +2376,10 @@ button:hover, .btn:hover {
     background: #ef4444;
 }
 
+.status-dot.warning {
+    background: #f59e0b;
+}
+
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
@@ -3556,13 +3560,14 @@ def render_help_page(user, config):
     # Build iFrame connectivity test list
     iframes = config.get('iframes', [])
     iframe_test_rows = ""
-    
+
     for i, iframe in enumerate(iframes):
         name = escape_html(iframe.get('name', f'Frame {i+1}'))
+        name_js_escaped = name.replace("'", "\\'")  # Escape for JS string
         url = iframe.get('url', '')
         url_escaped = escape_html(url).replace("'", "&#39;")
         enabled = iframe.get('enabled', True)
-        
+
         if not enabled:
             continue  # Skip disabled iframes for user view
         
@@ -3594,7 +3599,7 @@ def render_help_page(user, config):
                 </td>
                 <td data-label="Time" style="text-align:center;font-family:monospace;" id="help-time-{i}">—</td>
                 <td data-label="">
-                    <button class="btn btn-sm btn-secondary" onclick="helpTestUrl({i}, '{url_escaped}', '{escape_html(name).replace("'", "\\'")}')">Test</button>
+                    <button class="btn btn-sm btn-secondary" onclick="helpTestUrl({i}, '{url_escaped}', '{name_js_escaped}')">Test</button>
                 </td>
             </tr>'''
     
@@ -3811,45 +3816,140 @@ def render_help_page(user, config):
         var dot = document.getElementById('help-test-' + idx);
         var timeCell = document.getElementById('help-time-' + idx);
         if (!dot) return;
-        
+
         dot.className = 'status-dot loading';
         dot.textContent = '●';
         if (timeCell) timeCell.textContent = '...';
-        
+
         var startTime = performance.now();
+
+        // Use server-side proxy test for accurate HTTP status checking
+        // This avoids false positives from iframe.onload firing on error pages
+        fetch('/api/connectivity-test-url', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{ url: url, index: idx }})
+        }})
+        .then(function(response) {{ return response.json(); }})
+        .then(function(data) {{
+            var elapsed = Math.round(performance.now() - startTime);
+            var result = data.result || {{}};
+
+            // Determine success based on actual HTTP response
+            var isSuccess = result.status === 'success';
+            var isBlocked = false;
+            var reason = '';
+
+            // Check for X-Frame-Options that would block embedding
+            if (result.x_frame_options) {{
+                var xfo = result.x_frame_options.toUpperCase();
+                if (xfo === 'DENY' || xfo === 'SAMEORIGIN') {{
+                    isSuccess = false;
+                    isBlocked = true;
+                    reason = 'Blocked by X-Frame-Options';
+                }}
+            }}
+
+            // Check for CSP frame-ancestors that would block embedding
+            if (result.csp_frame_ancestors) {{
+                var csp = result.csp_frame_ancestors.toLowerCase();
+                if (csp.includes("'none'") || (csp.includes("'self'") && !csp.includes('*'))) {{
+                    isSuccess = false;
+                    isBlocked = true;
+                    reason = 'Blocked by Content-Security-Policy';
+                }}
+            }}
+
+            // Handle various error cases
+            if (result.status === 'error' || result.status === 'warning') {{
+                isSuccess = false;
+                reason = result.error || 'HTTP ' + result.http_status;
+            }}
+
+            // Update UI
+            dot.className = 'status-dot ' + (isSuccess ? 'connected' : (isBlocked ? 'warning' : 'error'));
+            dot.textContent = isSuccess ? '✓' : (isBlocked ? '⚠' : '✗');
+
+            if (timeCell) {{
+                var displayTime = result.response_time || (elapsed + ' ms');
+                // Parse the time for color coding
+                var timeMs = parseInt(displayTime);
+                if (isSuccess) {{
+                    var cls = timeMs < 1000 ? 'good' : (timeMs < 3000 ? 'warning' : 'error');
+                    timeCell.innerHTML = '<span class="test-metric ' + cls + '">' + displayTime + '</span>';
+                }} else if (isBlocked) {{
+                    timeCell.innerHTML = '<span class="test-metric warning">Blocked</span>';
+                }} else {{
+                    timeCell.innerHTML = '<span class="test-metric error">Failed</span>';
+                }}
+            }}
+
+            // Store result with additional details
+            helpTestResults[idx] = {{
+                success: isSuccess,
+                blocked: isBlocked,
+                time: elapsed,
+                name: name || 'Unknown',
+                reason: reason,
+                httpStatus: result.http_status
+            }};
+
+            checkForFailures();
+        }})
+        .catch(function(err) {{
+            // Fallback: if server test fails, use iframe-based test
+            helpTestUrlFallback(idx, url, name, startTime);
+        }});
+    }}
+
+    function helpTestUrlFallback(idx, url, name, startTime) {{
+        var dot = document.getElementById('help-test-' + idx);
+        var timeCell = document.getElementById('help-time-' + idx);
+        if (!dot) return;
+
         var done = false;
-        
         var f = document.createElement('iframe');
         f.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;';
-        
-        function finish(success) {{
+
+        function finish(success, reason) {{
             if (done) return;
             done = true;
             var elapsed = Math.round(performance.now() - startTime);
-            
+
             dot.className = 'status-dot ' + (success ? 'connected' : 'error');
             dot.textContent = success ? '✓' : '✗';
-            
+
             if (timeCell) {{
                 if (success) {{
                     var cls = elapsed < 1000 ? 'good' : (elapsed < 3000 ? 'warning' : 'error');
                     timeCell.innerHTML = '<span class="test-metric ' + cls + '">' + elapsed + ' ms</span>';
                 }} else {{
-                    timeCell.innerHTML = '<span class="test-metric error">Failed</span>';
+                    timeCell.innerHTML = '<span class="test-metric error">' + (reason || 'Failed') + '</span>';
                 }}
             }}
-            
-            helpTestResults[idx] = {{ success: success, time: elapsed, name: name || 'Unknown' }};
+
+            helpTestResults[idx] = {{ success: success, time: elapsed, name: name || 'Unknown', reason: reason }};
             try {{ document.body.removeChild(f); }} catch(e) {{}}
-            
-            // Check if we should show the send report button
             checkForFailures();
         }}
-        
-        f.onload = function() {{ finish(true); }};
-        f.onerror = function() {{ finish(false); }};
-        setTimeout(function() {{ if (!done) finish(false); }}, 10000);
-        
+
+        f.onload = function() {{
+            // onload fires even for error pages - try to detect actual content
+            try {{
+                var doc = f.contentDocument || f.contentWindow.document;
+                if (doc && doc.body && doc.body.innerHTML && doc.body.innerHTML.length > 50) {{
+                    finish(true);
+                }} else {{
+                    finish(false, 'Empty page');
+                }}
+            }} catch(e) {{
+                // Cross-origin - assume success but note it's unverified
+                finish(true, 'Unverified');
+            }}
+        }};
+        f.onerror = function() {{ finish(false, 'Network error'); }};
+        setTimeout(function() {{ if (!done) finish(false, 'Timeout'); }}, 10000);
+
         f.src = url;
         document.body.appendChild(f);
     }}
@@ -3874,14 +3974,31 @@ def render_help_page(user, config):
         var btns = document.querySelectorAll('[onclick^="helpTestUrl"]');
         var total = btns.length;
         var current = 0;
-        
+        var expectedTests = total;
+
+        if (total === 0) return;
+
+        // Track completion by checking helpTestResults periodically
+        var checkInterval = setInterval(function() {{
+            var completedTests = Object.keys(helpTestResults).length;
+            if (completedTests >= expectedTests) {{
+                clearInterval(checkInterval);
+                showHelpSummary();
+            }}
+        }}, 500);
+
+        // Also set a max timeout in case tests hang
+        setTimeout(function() {{
+            clearInterval(checkInterval);
+            showHelpSummary();
+        }}, (expectedTests * 12000) + 2000);
+
+        // Run tests with slight stagger to avoid overwhelming the server
         function runNext() {{
             if (current < total) {{
                 btns[current].click();
                 current++;
-                setTimeout(runNext, 600);
-            }} else {{
-                setTimeout(showHelpSummary, 1500);
+                setTimeout(runNext, 400);
             }}
         }}
         runNext();
@@ -5763,7 +5880,7 @@ def render_admin_page(user, config, message=None, error=None):
                 </div>
                 <div style="display:flex;gap:0.5rem;">
                     <button type="submit">Save Fallback Settings</button>
-                    {"<button type='submit' name='delete_fallback' value='1' class='btn btn-danger' onclick=\"return confirm('Remove fallback image?')\">Remove Image</button>" if config.get('fallback_image', {}).get('image') else ''}
+                    {'<button type="submit" name="delete_fallback" value="1" class="btn btn-danger" onclick="return confirm(&#39;Remove fallback image?&#39;)">Remove Image</button>' if config.get('fallback_image', {}).get('image') else ''}
                 </div>
             </form>
         </div>
@@ -7520,34 +7637,124 @@ def render_system_section(config):
                 if (!dot) return;
                 dot.style.color = '#f59e0b';
                 dot.textContent = '◐';
-                
+                dot.title = 'Testing...';
+
                 var start = performance.now();
+
+                // Use server-side proxy test for accurate HTTP status checking
+                // This avoids false positives from iframe.onload firing on error pages
+                fetch('/admin/system/connectivity-test-single', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ url: url, index: idx }})
+                }})
+                .then(function(response) {{ return response.json(); }})
+                .then(function(data) {{
+                    var ms = Math.round(performance.now() - start);
+                    var result = data.result || {{}};
+
+                    // Determine success based on actual HTTP response
+                    var isSuccess = result.status === 'success';
+                    var isBlocked = false;
+                    var reason = '';
+
+                    // Check for X-Frame-Options that would block embedding
+                    if (result.x_frame_options) {{
+                        var xfo = result.x_frame_options.toUpperCase();
+                        if (xfo === 'DENY' || xfo === 'SAMEORIGIN') {{
+                            isSuccess = false;
+                            isBlocked = true;
+                            reason = 'X-Frame-Options: ' + result.x_frame_options;
+                        }}
+                    }}
+
+                    // Check for CSP frame-ancestors that would block embedding
+                    if (result.csp_frame_ancestors) {{
+                        var csp = result.csp_frame_ancestors.toLowerCase();
+                        if (csp.includes("'none'") || (csp.includes("'self'") && !csp.includes('*'))) {{
+                            isSuccess = false;
+                            isBlocked = true;
+                            reason = 'CSP blocks framing';
+                        }}
+                    }}
+
+                    // Handle various error cases
+                    if (result.status === 'error' || result.status === 'warning') {{
+                        isSuccess = false;
+                        reason = result.error || 'HTTP ' + result.http_status;
+                    }}
+
+                    // Update UI
+                    dot.style.color = isSuccess ? '#22c55e' : (isBlocked ? '#f59e0b' : '#ef4444');
+                    dot.textContent = isSuccess ? '✓' : (isBlocked ? '⚠' : '✗');
+
+                    var title = isSuccess ? 'OK' : (isBlocked ? 'Blocked' : 'Failed');
+                    title += ' (' + (result.response_time || ms + ' ms') + ')';
+                    if (reason) title += '\\n' + reason;
+                    if (result.http_status) title += '\\nHTTP ' + result.http_status;
+                    dot.title = title;
+                }})
+                .catch(function(err) {{
+                    // Fallback: if server test fails, try iframe-based test with enhanced validation
+                    testUrlFallback(idx, url, name, start);
+                }});
+            }}
+
+            function testUrlFallback(idx, url, name, start) {{
+                var dot = document.getElementById('test-' + idx);
+                if (!dot) return;
+
                 var f = document.createElement('iframe');
                 f.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;';
                 var done = false;
-                
-                function finish(ok) {{
+
+                function finish(ok, reason) {{
                     if (done) return;
                     done = true;
                     var ms = Math.round(performance.now() - start);
                     dot.style.color = ok ? '#22c55e' : '#ef4444';
                     dot.textContent = ok ? '✓' : '✗';
-                    dot.title = (ok ? 'OK' : 'Failed') + ' (' + ms + 'ms)';
+                    var title = (ok ? 'OK' : 'Failed') + ' (' + ms + 'ms)';
+                    if (reason) title += '\\n' + reason;
+                    dot.title = title;
                     try {{ document.body.removeChild(f); }} catch(e) {{}}
                 }}
-                
-                f.onload = function() {{ finish(true); }};
-                f.onerror = function() {{ finish(false); }};
-                setTimeout(function() {{ finish(false); }}, 8000);
-                
+
+                f.onload = function() {{
+                    // onload fires even for error pages and blocked frames
+                    // Try to detect if content actually loaded by checking accessibility
+                    try {{
+                        // This will throw for cross-origin iframes (which is expected)
+                        // But if we can access it and it's blank/error, that's a failure
+                        var doc = f.contentDocument || f.contentWindow.document;
+                        var body = doc.body;
+                        // If we get here, same-origin - check if it has content
+                        if (body && body.innerHTML && body.innerHTML.length > 50) {{
+                            finish(true);
+                        }} else {{
+                            finish(false, 'Empty or error page');
+                        }}
+                    }} catch(e) {{
+                        // Cross-origin - we can't tell if it loaded properly
+                        // Check iframe dimensions as a heuristic
+                        setTimeout(function() {{
+                            // For cross-origin, we have to assume success if onload fired
+                            // but warn that we can't fully verify
+                            finish(true, 'Cross-origin (unverified)');
+                        }}, 100);
+                    }}
+                }};
+                f.onerror = function() {{ finish(false, 'Network error'); }};
+                setTimeout(function() {{ finish(false, 'Timeout'); }}, 8000);
+
                 document.body.appendChild(f);
                 f.src = url;
             }}
-            
+
             function testAllFrames() {{
                 document.querySelectorAll('[id^="test-"]').forEach(function(dot, i) {{
                     var btn = dot.parentElement.querySelector('button');
-                    if (btn) setTimeout(function() {{ btn.click(); }}, i * 200);
+                    if (btn) setTimeout(function() {{ btn.click(); }}, i * 300);
                 }});
             }}
             </script>
@@ -8061,7 +8268,89 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 server_logger.error(f"Connectivity report error: {str(e)}")
                 self.send_json({'success': False, 'error': str(e)})
-        
+
+        elif path == '/api/connectivity-test-url':
+            # Public API endpoint for testing a single URL's connectivity
+            # Used by the help page to get accurate HTTP status instead of relying on iframe onload
+            if not user:
+                self.send_json({'success': False, 'error': 'Authentication required'}, 401)
+                return
+
+            import urllib.request
+            import urllib.error
+            import ssl
+
+            url = data.get('url', '')
+            idx = data.get('index', 0)
+
+            if not url:
+                self.send_json({'success': False, 'error': 'No URL provided'})
+                return
+
+            # Create SSL context that doesn't verify certificates (for testing)
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+            result = {
+                'index': idx,
+                'url': url[:100],
+                'status': 'testing'
+            }
+
+            try:
+                start_time = time_module.time()
+                req = urllib.request.Request(url, method='GET', headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                })
+
+                with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
+                    elapsed = round((time_module.time() - start_time) * 1000)
+                    result['status'] = 'success'
+                    result['response_time'] = f'{elapsed} ms'
+                    result['http_status'] = response.status
+
+                    # Check for iframe-blocking headers
+                    result['x_frame_options'] = response.headers.get('X-Frame-Options', '')
+
+                    # Check Content-Security-Policy for frame-ancestors
+                    csp = response.headers.get('Content-Security-Policy', '')
+                    if 'frame-ancestors' in csp.lower():
+                        import re
+                        match = re.search(r'frame-ancestors\s+([^;]+)', csp, re.IGNORECASE)
+                        if match:
+                            result['csp_frame_ancestors'] = match.group(1).strip()
+
+            except urllib.error.HTTPError as e:
+                elapsed = round((time_module.time() - start_time) * 1000)
+                result['status'] = 'error'
+                result['response_time'] = f'{elapsed} ms'
+                result['http_status'] = e.code
+                result['error'] = f'HTTP {e.code}: {e.reason}'
+                try:
+                    result['x_frame_options'] = e.headers.get('X-Frame-Options', '')
+                except:
+                    pass
+
+            except urllib.error.URLError as e:
+                result['status'] = 'error'
+                result['error'] = f'Network error: {str(e.reason)[:40]}'
+
+            except ssl.SSLError as e:
+                result['status'] = 'error'
+                result['error'] = f'SSL Error: {str(e)[:40]}'
+
+            except Exception as e:
+                result['status'] = 'error'
+                result['error'] = str(e)[:50]
+
+            self.send_json({
+                'success': True,
+                'result': result
+            })
+
         elif not user:
             self.redirect('/login')
         
@@ -8879,7 +9168,90 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 'total': len(results),
                 'results': results
             })
-        
+
+        elif path == '/admin/system/connectivity-test-single':
+            # Server-side connectivity test for a single URL
+            # This provides accurate HTTP status checking to avoid false positives
+            import urllib.request
+            import urllib.error
+            import ssl
+
+            url = data.get('url', '')
+            idx = data.get('index', 0)
+
+            if not url:
+                self.send_json({'success': False, 'error': 'No URL provided'})
+                return
+
+            # Create SSL context that doesn't verify certificates (for testing)
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+            result = {
+                'index': idx,
+                'url': url[:100],
+                'status': 'testing'
+            }
+
+            try:
+                start_time = time_module.time()
+                req = urllib.request.Request(url, method='GET', headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                })
+
+                with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
+                    elapsed = round((time_module.time() - start_time) * 1000)
+                    result['status'] = 'success'
+                    result['response_time'] = f'{elapsed} ms'
+                    result['http_status'] = response.status
+                    result['content_type'] = response.headers.get('Content-Type', 'Unknown')[:50]
+
+                    # Check for iframe-blocking headers
+                    result['x_frame_options'] = response.headers.get('X-Frame-Options', '')
+
+                    # Check Content-Security-Policy for frame-ancestors
+                    csp = response.headers.get('Content-Security-Policy', '')
+                    if 'frame-ancestors' in csp.lower():
+                        # Extract the frame-ancestors directive
+                        import re
+                        match = re.search(r'frame-ancestors\s+([^;]+)', csp, re.IGNORECASE)
+                        if match:
+                            result['csp_frame_ancestors'] = match.group(1).strip()
+
+                    result['server'] = response.headers.get('Server', '')[:30]
+
+            except urllib.error.HTTPError as e:
+                elapsed = round((time_module.time() - start_time) * 1000)
+                result['status'] = 'error'
+                result['response_time'] = f'{elapsed} ms'
+                result['http_status'] = e.code
+                result['error'] = f'HTTP {e.code}: {e.reason}'
+                # Even on HTTP errors, try to get headers
+                try:
+                    result['x_frame_options'] = e.headers.get('X-Frame-Options', '')
+                except:
+                    pass
+
+            except urllib.error.URLError as e:
+                result['status'] = 'error'
+                result['error'] = f'Network error: {str(e.reason)[:40]}'
+
+            except ssl.SSLError as e:
+                result['status'] = 'error'
+                result['error'] = f'SSL Error: {str(e)[:40]}'
+
+            except Exception as e:
+                result['status'] = 'error'
+                result['error'] = str(e)[:50]
+
+            self.send_json({
+                'success': True,
+                'result': result
+            })
+
         elif path == '/admin/system/export-config':
             # Export full config for backup/restore (includes password hashes)
             export_config = json.loads(json.dumps(config))

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1.4
+Multi-Frames v1.1.5
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -17,6 +17,7 @@ Features:
 - mDNS/Bonjour local network discovery
 - Session-based authentication
 - Responsive design
+- Raspberry Pi auto-detection and management
 
 Usage:
     python multi_frames.py [--port PORT] [--host HOST]
@@ -25,6 +26,17 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.1.5 (2025-01-25)
+        - Automatic Raspberry Pi detection
+        - Pi-specific system info (model, temperature, throttling status)
+        - Change Pi hostname from web interface
+        - Reboot/Shutdown Pi from Admin panel
+        - dhcpcd network configuration support for Pi OS
+        - Temperature monitoring with status indicators
+        - Throttling and under-voltage warnings
+        - /api/pi-status endpoint for Pi info
+        - /api/ping endpoint for connectivity checks
+
     v1.1.4 (2025-01-25)
         - Fixed browser back button affecting parent page when in iframes
         - Added sandbox attribute to prevent iframe top-level navigation
@@ -119,7 +131,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 VERSION_DATE = "2025-01-25"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -246,7 +258,9 @@ def get_system_info():
         'config_file': CONFIG_FILE,
         'zeroconf_available': ZEROCONF_AVAILABLE,
         'mdns_running': mdns_service.running if mdns_service else False,
-        'server_uptime': None, 'memory_mb': 'N/A'
+        'server_uptime': None, 'memory_mb': 'N/A',
+        'is_raspberry_pi': False,
+        'pi_info': None
     }
     if SERVER_START_TIME:
         uptime = datetime.now() - SERVER_START_TIME
@@ -257,7 +271,301 @@ def get_system_info():
         import resource
         info['memory_mb'] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2)
     except: pass
+    
+    # Check for Raspberry Pi
+    pi_info = get_raspberry_pi_info()
+    if pi_info:
+        info['is_raspberry_pi'] = True
+        info['pi_info'] = pi_info
+    
     return info
+
+def get_raspberry_pi_info():
+    """
+    Detect if running on a Raspberry Pi and return device info.
+    Returns None if not a Pi, or dict with Pi details.
+    """
+    pi_info = None
+    
+    try:
+        # Method 1: Check /proc/device-tree/model (most reliable)
+        if os.path.exists('/proc/device-tree/model'):
+            with open('/proc/device-tree/model', 'r') as f:
+                model = f.read().strip().replace('\x00', '')
+                if 'raspberry pi' in model.lower():
+                    pi_info = {'model': model, 'detection_method': 'device-tree'}
+        
+        # Method 2: Check /proc/cpuinfo for Pi-specific hardware
+        if not pi_info and os.path.exists('/proc/cpuinfo'):
+            with open('/proc/cpuinfo', 'r') as f:
+                cpuinfo = f.read()
+                if 'BCM' in cpuinfo or 'Raspberry' in cpuinfo:
+                    # Extract model from cpuinfo
+                    for line in cpuinfo.split('\n'):
+                        if line.startswith('Model'):
+                            model = line.split(':')[1].strip() if ':' in line else 'Raspberry Pi'
+                            pi_info = {'model': model, 'detection_method': 'cpuinfo'}
+                            break
+                        elif line.startswith('Hardware'):
+                            hardware = line.split(':')[1].strip() if ':' in line else ''
+                            if 'BCM' in hardware:
+                                pi_info = {'model': f'Raspberry Pi ({hardware})', 'detection_method': 'cpuinfo'}
+        
+        # Method 3: Check for Pi-specific files
+        if not pi_info:
+            pi_indicators = [
+                '/opt/vc/bin/vcgencmd',  # VideoCore tools
+                '/boot/config.txt',       # Pi boot config (older)
+                '/boot/firmware/config.txt'  # Pi boot config (newer)
+            ]
+            for indicator in pi_indicators:
+                if os.path.exists(indicator):
+                    pi_info = {'model': 'Raspberry Pi (detected)', 'detection_method': 'filesystem'}
+                    break
+        
+        if pi_info:
+            # Get additional Pi info
+            pi_info['serial'] = None
+            pi_info['revision'] = None
+            pi_info['temperature'] = None
+            pi_info['throttled'] = None
+            pi_info['memory_total'] = None
+            pi_info['boot_config'] = None
+            
+            # Get serial and revision from cpuinfo
+            if os.path.exists('/proc/cpuinfo'):
+                with open('/proc/cpuinfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('Serial'):
+                            pi_info['serial'] = line.split(':')[1].strip() if ':' in line else None
+                        elif line.startswith('Revision'):
+                            pi_info['revision'] = line.split(':')[1].strip() if ':' in line else None
+            
+            # Get temperature using vcgencmd
+            try:
+                result = subprocess.run(['vcgencmd', 'measure_temp'], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    # Output: temp=42.0'C
+                    temp_str = result.stdout.strip()
+                    if 'temp=' in temp_str:
+                        temp = temp_str.split('=')[1].replace("'C", "").strip()
+                        pi_info['temperature'] = float(temp)
+            except: pass
+            
+            # Get throttling status
+            try:
+                result = subprocess.run(['vcgencmd', 'get_throttled'], 
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    # Output: throttled=0x0
+                    throttle_str = result.stdout.strip()
+                    if 'throttled=' in throttle_str:
+                        throttle_hex = throttle_str.split('=')[1].strip()
+                        throttle_val = int(throttle_hex, 16)
+                        pi_info['throttled'] = {
+                            'value': throttle_hex,
+                            'under_voltage': bool(throttle_val & 0x1),
+                            'freq_capped': bool(throttle_val & 0x2),
+                            'throttled': bool(throttle_val & 0x4),
+                            'soft_temp_limit': bool(throttle_val & 0x8),
+                            'under_voltage_occurred': bool(throttle_val & 0x10000),
+                            'freq_capped_occurred': bool(throttle_val & 0x20000),
+                            'throttled_occurred': bool(throttle_val & 0x40000),
+                            'soft_temp_occurred': bool(throttle_val & 0x80000)
+                        }
+            except: pass
+            
+            # Get total memory
+            if os.path.exists('/proc/meminfo'):
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('MemTotal'):
+                            mem_kb = int(line.split()[1])
+                            pi_info['memory_total'] = round(mem_kb / 1024)  # MB
+                            break
+            
+            # Determine boot config file location
+            if os.path.exists('/boot/firmware/config.txt'):
+                pi_info['boot_config'] = '/boot/firmware/config.txt'
+            elif os.path.exists('/boot/config.txt'):
+                pi_info['boot_config'] = '/boot/config.txt'
+            
+            # Check which network config method is used
+            pi_info['network_config'] = 'unknown'
+            if os.path.exists('/etc/dhcpcd.conf'):
+                pi_info['network_config'] = 'dhcpcd'
+            elif os.path.exists('/etc/netplan'):
+                pi_info['network_config'] = 'netplan'
+            elif os.path.exists('/etc/network/interfaces'):
+                pi_info['network_config'] = 'interfaces'
+            
+            # Get hostname
+            try:
+                pi_info['hostname'] = socket.gethostname()
+            except:
+                pi_info['hostname'] = 'unknown'
+    
+    except Exception as e:
+        # If anything fails, just return None
+        pass
+    
+    return pi_info
+
+def get_pi_config_settings():
+    """Read current Raspberry Pi config.txt settings."""
+    settings = {}
+    
+    # Find config file
+    config_file = None
+    if os.path.exists('/boot/firmware/config.txt'):
+        config_file = '/boot/firmware/config.txt'
+    elif os.path.exists('/boot/config.txt'):
+        config_file = '/boot/config.txt'
+    
+    if not config_file:
+        return settings
+    
+    try:
+        with open(config_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    settings[key.strip()] = value.strip()
+    except:
+        pass
+    
+    return settings
+
+def set_pi_hostname(new_hostname):
+    """Set Raspberry Pi hostname. Returns (success, message)."""
+    if not new_hostname or not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$', new_hostname):
+        return False, "Invalid hostname. Use only letters, numbers, and hyphens."
+    
+    try:
+        # Update /etc/hostname
+        with open('/etc/hostname', 'w') as f:
+            f.write(new_hostname + '\n')
+        
+        # Update /etc/hosts
+        hosts_content = ""
+        with open('/etc/hosts', 'r') as f:
+            for line in f:
+                if '127.0.1.1' in line:
+                    hosts_content += f"127.0.1.1\t{new_hostname}\n"
+                else:
+                    hosts_content += line
+        
+        with open('/etc/hosts', 'w') as f:
+            f.write(hosts_content)
+        
+        # Apply hostname immediately
+        subprocess.run(['hostnamectl', 'set-hostname', new_hostname], 
+                      capture_output=True, timeout=10)
+        
+        return True, f"Hostname changed to '{new_hostname}'. Reboot recommended."
+    except PermissionError:
+        return False, "Permission denied. Run as root to change hostname."
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+def apply_pi_network_dhcpcd(interface, mode, ip_addr=None, subnet=None, gateway=None, dns_primary=None, dns_secondary=None):
+    """Apply network configuration using dhcpcd (Raspberry Pi OS default)."""
+    dhcpcd_conf = '/etc/dhcpcd.conf'
+    
+    try:
+        # Read existing config
+        existing_content = ""
+        if os.path.exists(dhcpcd_conf):
+            with open(dhcpcd_conf, 'r') as f:
+                existing_content = f.read()
+        
+        # Remove any existing static IP config for this interface
+        lines = existing_content.split('\n')
+        new_lines = []
+        skip_until_blank = False
+        
+        for line in lines:
+            if line.strip().startswith(f'interface {interface}'):
+                skip_until_blank = True
+                continue
+            if skip_until_blank:
+                if line.strip() == '' or line.strip().startswith('interface '):
+                    skip_until_blank = False
+                    if line.strip().startswith('interface '):
+                        new_lines.append(line)
+                continue
+            new_lines.append(line)
+        
+        # Build new config
+        new_content = '\n'.join(new_lines).strip()
+        
+        if mode == 'static':
+            # Convert subnet mask to CIDR notation
+            cidr = subnet_to_cidr(subnet) if subnet else '24'
+            
+            static_config = f"""
+
+# Multi-Frames static IP configuration
+interface {interface}
+static ip_address={ip_addr}/{cidr}"""
+            
+            if gateway:
+                static_config += f"\nstatic routers={gateway}"
+            
+            dns_servers = []
+            if dns_primary:
+                dns_servers.append(dns_primary)
+            if dns_secondary:
+                dns_servers.append(dns_secondary)
+            if dns_servers:
+                static_config += f"\nstatic domain_name_servers={' '.join(dns_servers)}"
+            
+            new_content += static_config
+        
+        new_content += '\n'
+        
+        # Backup existing config
+        if os.path.exists(dhcpcd_conf):
+            backup_file = dhcpcd_conf + '.backup'
+            with open(backup_file, 'w') as f:
+                f.write(existing_content)
+        
+        # Write new config
+        with open(dhcpcd_conf, 'w') as f:
+            f.write(new_content)
+        
+        # Restart dhcpcd service
+        result = subprocess.run(['systemctl', 'restart', 'dhcpcd'], 
+                              capture_output=True, text=True, timeout=30)
+        
+        if result.returncode != 0:
+            # Restore backup
+            if os.path.exists(dhcpcd_conf + '.backup'):
+                with open(dhcpcd_conf + '.backup', 'r') as f:
+                    with open(dhcpcd_conf, 'w') as wf:
+                        wf.write(f.read())
+                subprocess.run(['systemctl', 'restart', 'dhcpcd'], capture_output=True, timeout=30)
+            return False, f"Failed to apply: {result.stderr}"
+        
+        return True, "Network configured via dhcpcd. Changes applied."
+        
+    except PermissionError:
+        return False, "Permission denied. Run as root to change network settings."
+    except subprocess.TimeoutExpired:
+        return False, "Network configuration timed out."
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+def subnet_to_cidr(subnet):
+    """Convert subnet mask (255.255.255.0) to CIDR notation (24)."""
+    try:
+        octets = subnet.split('.')
+        binary = ''.join([bin(int(x))[2:].zfill(8) for x in octets])
+        return str(binary.count('1'))
+    except:
+        return '24'
 
 def get_network_diagnostics():
     """Get network diagnostic information."""
@@ -340,7 +648,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1.4 by LTS, Inc.",
+            "text": "Multi-Frames v1.1.5 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -675,8 +983,10 @@ def get_current_network_info():
                             if dns not in info['current_dns']:
                                 info['current_dns'].append(dns)
             
-            # Detect config method
-            if os.path.exists('/etc/netplan'):
+            # Detect config method - check dhcpcd first (Raspberry Pi OS)
+            if os.path.exists('/etc/dhcpcd.conf'):
+                info['config_method'] = 'dhcpcd'
+            elif os.path.exists('/etc/netplan'):
                 info['config_method'] = 'netplan'
             elif os.path.exists('/etc/network/interfaces'):
                 info['config_method'] = 'interfaces'
@@ -883,9 +1193,14 @@ def apply_network_macos(interface, mode, ip_addr=None, subnet=None, gateway=None
         return False, f"Error: {str(e)}"
 
 def apply_network_linux(interface, mode, ip_addr=None, subnet=None, gateway=None, dns_primary=None, dns_secondary=None):
-    """Apply network configuration on Linux."""
+    """Apply network configuration on Linux (including Raspberry Pi)."""
     net_info = get_current_network_info()
     config_method = net_info.get('config_method', 'unknown')
+    
+    # Check if this is a Raspberry Pi and use dhcpcd if available
+    pi_info = get_raspberry_pi_info()
+    if pi_info and pi_info.get('network_config') == 'dhcpcd':
+        return apply_pi_network_dhcpcd(interface, mode, ip_addr, subnet, gateway, dns_primary, dns_secondary)
     
     try:
         if config_method == 'netplan':
@@ -902,6 +1217,10 @@ def apply_network_linux(interface, mode, ip_addr=None, subnet=None, gateway=None
                 return False, f"Netplan apply failed: {result.stderr}"
             
             return True, "Network configured via netplan."
+        
+        elif config_method == 'dhcpcd':
+            # Fallback: use dhcpcd directly
+            return apply_pi_network_dhcpcd(interface, mode, ip_addr, subnet, gateway, dns_primary, dns_secondary)
             
         elif config_method == 'interfaces':
             config_file = '/etc/network/interfaces'
@@ -2610,7 +2929,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.4 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.5 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -4798,7 +5117,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.4 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.5 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -5886,6 +6205,152 @@ def render_network_section(config, server_port=8080):
     '''
 
 
+def render_raspberry_pi_section():
+    """Render Raspberry Pi specific system information and controls."""
+    pi_info = get_raspberry_pi_info()
+    
+    if not pi_info:
+        return ""
+    
+    # Build status indicators
+    temp_status = ""
+    temp_color = "#22c55e"  # green
+    if pi_info.get('temperature'):
+        temp = pi_info['temperature']
+        if temp >= 80:
+            temp_color = "#ef4444"  # red
+            temp_status = "🔥 Critical!"
+        elif temp >= 70:
+            temp_color = "#f59e0b"  # orange
+            temp_status = "⚠️ Hot"
+        elif temp >= 60:
+            temp_color = "#eab308"  # yellow
+            temp_status = "Warm"
+        else:
+            temp_status = "Normal"
+    
+    # Throttling status
+    throttle_html = ""
+    if pi_info.get('throttled'):
+        t = pi_info['throttled']
+        issues = []
+        if t.get('under_voltage'):
+            issues.append('<span style="color:#ef4444;">⚡ Under-voltage NOW</span>')
+        if t.get('throttled'):
+            issues.append('<span style="color:#ef4444;">🌡️ Throttled NOW</span>')
+        if t.get('freq_capped'):
+            issues.append('<span style="color:#f59e0b;">📉 Frequency capped</span>')
+        if t.get('under_voltage_occurred'):
+            issues.append('<span style="color:#f59e0b;">⚡ Under-voltage occurred</span>')
+        if t.get('throttled_occurred'):
+            issues.append('<span style="color:#f59e0b;">🌡️ Throttling occurred</span>')
+        
+        if issues:
+            throttle_html = '<div style="margin-top:0.5rem;padding:0.5rem;background:rgba(239,68,68,0.1);border-radius:0.25rem;font-size:0.8rem;">' + '<br>'.join(issues) + '</div>'
+        elif t.get('value') == '0x0':
+            throttle_html = '<div style="margin-top:0.5rem;color:#22c55e;font-size:0.85rem;">✓ No throttling issues detected</div>'
+    
+    # Network config method
+    net_config = pi_info.get('network_config', 'unknown')
+    net_config_display = {
+        'dhcpcd': 'dhcpcd (Raspberry Pi OS default)',
+        'netplan': 'netplan (Ubuntu)',
+        'interfaces': '/etc/network/interfaces',
+        'unknown': 'Unknown'
+    }.get(net_config, net_config)
+    
+    return f'''
+    <div class="admin-subsection" style="background:linear-gradient(135deg, rgba(192,51,74,0.1) 0%, rgba(117,29,74,0.1) 100%);border:1px solid rgba(192,51,74,0.3);border-radius:var(--radius);padding:1rem;margin-bottom:1rem;">
+        <h4 style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">
+            <span style="font-size:1.5rem;">🍓</span> Raspberry Pi Detected
+        </h4>
+        
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:1rem;margin-bottom:1rem;">
+            <div style="background:var(--bg-primary);padding:1rem;border-radius:var(--radius);">
+                <div style="color:var(--text-secondary);font-size:0.8rem;">Model</div>
+                <div style="font-weight:600;font-size:0.95rem;">{escape_html(pi_info.get('model', 'Unknown'))}</div>
+            </div>
+            <div style="background:var(--bg-primary);padding:1rem;border-radius:var(--radius);">
+                <div style="color:var(--text-secondary);font-size:0.8rem;">Temperature</div>
+                <div style="font-weight:600;font-size:1.1rem;color:{temp_color};">
+                    {pi_info.get('temperature', 'N/A')}°C
+                    <span style="font-size:0.75rem;font-weight:normal;margin-left:0.5rem;">{temp_status}</span>
+                </div>
+            </div>
+            <div style="background:var(--bg-primary);padding:1rem;border-radius:var(--radius);">
+                <div style="color:var(--text-secondary);font-size:0.8rem;">Memory</div>
+                <div style="font-weight:600;">{pi_info.get('memory_total', 'N/A')} MB</div>
+            </div>
+            <div style="background:var(--bg-primary);padding:1rem;border-radius:var(--radius);">
+                <div style="color:var(--text-secondary);font-size:0.8rem;">Hostname</div>
+                <div style="font-weight:600;font-family:monospace;">{escape_html(pi_info.get('hostname', 'Unknown'))}</div>
+            </div>
+        </div>
+        
+        {throttle_html}
+        
+        <details style="margin-top:1rem;">
+            <summary style="cursor:pointer;color:var(--text-secondary);font-size:0.85rem;">📊 Hardware Details</summary>
+            <table style="width:100%;font-size:0.85rem;margin-top:0.75rem;">
+                <tr><td style="padding:0.3rem 0;color:var(--text-secondary);width:40%;">Serial</td><td style="font-family:monospace;">{escape_html(pi_info.get('serial', 'N/A') or 'N/A')}</td></tr>
+                <tr><td style="padding:0.3rem 0;color:var(--text-secondary);">Revision</td><td style="font-family:monospace;">{escape_html(pi_info.get('revision', 'N/A') or 'N/A')}</td></tr>
+                <tr><td style="padding:0.3rem 0;color:var(--text-secondary);">Boot Config</td><td style="font-family:monospace;font-size:0.8rem;">{escape_html(pi_info.get('boot_config', 'Not found') or 'Not found')}</td></tr>
+                <tr><td style="padding:0.3rem 0;color:var(--text-secondary);">Network Config</td><td>{escape_html(net_config_display)}</td></tr>
+                <tr><td style="padding:0.3rem 0;color:var(--text-secondary);">Detection Method</td><td>{escape_html(pi_info.get('detection_method', 'N/A'))}</td></tr>
+            </table>
+        </details>
+        
+        <details style="margin-top:1rem;">
+            <summary style="cursor:pointer;color:var(--text-secondary);font-size:0.85rem;">⚙️ Raspberry Pi Settings</summary>
+            <div style="margin-top:0.75rem;padding:1rem;background:var(--bg-primary);border-radius:var(--radius);">
+                <form method="POST" action="/admin/system/pi-hostname">
+                    <div class="form-group" style="margin-bottom:0.75rem;">
+                        <label>Change Hostname</label>
+                        <div style="display:flex;gap:0.5rem;">
+                            <input type="text" name="hostname" value="{escape_html(pi_info.get('hostname', ''))}" 
+                                   pattern="[a-zA-Z0-9]([a-zA-Z0-9-]{{0,61}}[a-zA-Z0-9])?" 
+                                   placeholder="my-raspberry-pi" style="flex:1;">
+                            <button type="submit" class="btn btn-sm">Set Hostname</button>
+                        </div>
+                        <small style="color:var(--text-secondary);">Requires reboot. Letters, numbers, and hyphens only.</small>
+                    </div>
+                </form>
+                
+                <hr style="border:none;border-top:1px solid var(--border);margin:1rem 0;">
+                
+                <div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0.75rem;">
+                    <strong>Quick Actions</strong>
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                    <form method="POST" action="/admin/system/pi-reboot" onsubmit="return confirm('Reboot the Raspberry Pi now?')">
+                        <button type="submit" class="btn btn-secondary btn-sm">🔄 Reboot Pi</button>
+                    </form>
+                    <form method="POST" action="/admin/system/pi-shutdown" onsubmit="return confirm('Shutdown the Raspberry Pi? You will need physical access to turn it back on.')">
+                        <button type="submit" class="btn btn-danger btn-sm">⏻ Shutdown Pi</button>
+                    </form>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="refreshPiTemp()">🌡️ Refresh Temp</button>
+                </div>
+                
+                <script>
+                function refreshPiTemp() {{
+                    fetch('/api/pi-status')
+                        .then(r => r.json())
+                        .then(data => {{
+                            if (data.temperature) {{
+                                alert('Current temperature: ' + data.temperature + '°C');
+                            }} else {{
+                                alert('Could not read temperature');
+                            }}
+                        }})
+                        .catch(() => alert('Failed to get temperature'));
+                }}
+                </script>
+            </div>
+        </details>
+    </div>
+    '''
+
+
 def render_system_section(config):
     """Render the system/debug section with logs, stats, and diagnostics."""
     global server_logger, SERVER_START_TIME
@@ -6321,6 +6786,8 @@ def render_system_section(config):
     <div class="admin-section">
         <h3>🖥️ System Information</h3>
         <div class="admin-content">
+            {render_raspberry_pi_section()}
+            
             <div class="admin-subsection">
                 <h4>🐍 Runtime</h4>
                 <table style="width:100%;font-size:0.85rem;">
@@ -6634,6 +7101,29 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 'ip': client_ip,
                 'server_port': SERVER_PORT
             })
+        
+        elif path == '/api/pi-status':
+            # Return Raspberry Pi status information
+            pi_info = get_raspberry_pi_info()
+            if pi_info:
+                self.send_json({
+                    'is_raspberry_pi': True,
+                    'model': pi_info.get('model'),
+                    'temperature': pi_info.get('temperature'),
+                    'memory_total': pi_info.get('memory_total'),
+                    'hostname': pi_info.get('hostname'),
+                    'throttled': pi_info.get('throttled'),
+                    'network_config': pi_info.get('network_config')
+                })
+            else:
+                self.send_json({
+                    'is_raspberry_pi': False,
+                    'message': 'Not running on Raspberry Pi'
+                })
+        
+        elif path == '/api/ping':
+            # Simple ping endpoint for connectivity check
+            self.send_json({'status': 'ok', 'timestamp': datetime.now().isoformat()})
         
         else:
             self.send_html(render_page("Not Found", '<div class="card"><h2>404</h2><p>Page not found.</p></div>', user, config), 404)
@@ -7367,7 +7857,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.4 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.5 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         
@@ -7933,6 +8423,111 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             
             threading.Thread(target=restart_server, daemon=True).start()
         
+        elif path == '/admin/system/pi-hostname':
+            # Raspberry Pi hostname change
+            pi_info = get_raspberry_pi_info()
+            if not pi_info:
+                self.send_html(render_admin_page(user, config, error="Not running on Raspberry Pi"))
+                return
+            
+            new_hostname = data.get('hostname', '').strip().lower()
+            success, message = set_pi_hostname(new_hostname)
+            
+            if success:
+                server_logger.info(f"Raspberry Pi hostname changed to '{new_hostname}' by {user}")
+                self.send_html(render_admin_page(user, config, message=message))
+            else:
+                self.send_html(render_admin_page(user, config, error=message))
+        
+        elif path == '/admin/system/pi-reboot':
+            # Raspberry Pi reboot
+            pi_info = get_raspberry_pi_info()
+            if not pi_info:
+                self.send_html(render_admin_page(user, config, error="Not running on Raspberry Pi"))
+                return
+            
+            server_logger.info(f"Raspberry Pi reboot initiated by {user}")
+            
+            reboot_html = '''
+            <div class="card" style="max-width:500px;margin:2rem auto;text-align:center;">
+                <h2>🔄 Raspberry Pi Rebooting</h2>
+                <p style="margin:1.5rem 0;">
+                    The Raspberry Pi will reboot now. Please wait about 30-60 seconds.
+                </p>
+                <div class="status-dot loading" style="margin:1rem auto;"></div>
+                <p style="font-size:0.85rem;color:var(--text-secondary);margin-top:1rem;">
+                    The page will attempt to reconnect automatically.
+                </p>
+                <script>
+                setTimeout(function() {
+                    var attempts = 0;
+                    var maxAttempts = 30;
+                    var checkInterval = setInterval(function() {
+                        attempts++;
+                        fetch('/api/ping', {method: 'GET', cache: 'no-cache'})
+                            .then(function(r) {
+                                if (r.ok) {
+                                    clearInterval(checkInterval);
+                                    window.location.href = '/admin';
+                                }
+                            })
+                            .catch(function() {});
+                        if (attempts >= maxAttempts) {
+                            clearInterval(checkInterval);
+                            document.body.innerHTML = '<div style="text-align:center;padding:2rem;"><h2>Connection Lost</h2><p>Could not reconnect. <a href="/admin">Try manually</a></p></div>';
+                        }
+                    }, 3000);
+                }, 5000);
+                </script>
+            </div>
+            '''
+            self.send_html(render_page("Rebooting", reboot_html, user, config))
+            
+            # Schedule reboot
+            import threading
+            def reboot_pi():
+                time_module.sleep(2)
+                try:
+                    subprocess.run(['sudo', 'reboot'], capture_output=True, timeout=10)
+                except:
+                    pass
+            
+            threading.Thread(target=reboot_pi, daemon=True).start()
+        
+        elif path == '/admin/system/pi-shutdown':
+            # Raspberry Pi shutdown
+            pi_info = get_raspberry_pi_info()
+            if not pi_info:
+                self.send_html(render_admin_page(user, config, error="Not running on Raspberry Pi"))
+                return
+            
+            server_logger.info(f"Raspberry Pi shutdown initiated by {user}")
+            
+            shutdown_html = '''
+            <div class="card" style="max-width:500px;margin:2rem auto;text-align:center;">
+                <h2>⏻ Raspberry Pi Shutting Down</h2>
+                <p style="margin:1.5rem 0;">
+                    The Raspberry Pi is shutting down. You will need physical access to power it back on.
+                </p>
+                <div style="font-size:3rem;margin:1rem 0;">🔌</div>
+                <p style="font-size:0.85rem;color:var(--text-secondary);">
+                    Wait for the green activity light to stop blinking before disconnecting power.
+                </p>
+            </div>
+            '''
+            self.send_html(render_page("Shutting Down", shutdown_html, user, config))
+            
+            # Schedule shutdown
+            import threading
+            def shutdown_pi():
+                time_module.sleep(2)
+                try:
+                    subprocess.run(['sudo', 'shutdown', '-h', 'now'], capture_output=True, timeout=10)
+                except:
+                    pass
+            
+            threading.Thread(target=shutdown_pi, daemon=True).start()
+        
         else:
             self.redirect('/admin')
 
@@ -8067,7 +8662,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME
     
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.4 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.5 - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

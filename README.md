@@ -8,10 +8,10 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.1.4-2025--01--25-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.1.5-2025--01--25-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
-[![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux-888888?style=flat-square&labelColor=000000)](#)
+[![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
 
 <br>
 
@@ -21,7 +21,11 @@ Built for home dashboards, kiosks, and digital signage
 
 <br>
 
-[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v110) • [Screenshots](#-admin-panel)
+*Designed and Developed by Marco Longoria, LTS, Inc.*
+
+<br>
+
+[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v115) • [Documentation](#-configuration)
 
 </div>
 
@@ -52,6 +56,7 @@ Built for home dashboards, kiosks, and digital signage
 - **Session authentication** — Secure token-based login
 - **Password hashing** — SHA-256 encryption
 - **Role-based access** — Admin and user accounts
+- **Rate limiting** — Login attempt protection
 - **Sandboxed iFrames** — Isolated content display
 
 </td>
@@ -141,7 +146,6 @@ Control network devices directly from your dashboard:
 - Visual feedback with pulse animations
 - Success/error state indicators
 - JSON config or visual button builder
-- Built-in test modes for development
 
 <br>
 
@@ -201,10 +205,10 @@ Seven organized sections with mobile-friendly navigation:
 | 📺 | **iFrames** | Add, edit, reorder, delete frames |
 | 🎨 | **Appearance** | Colors, backgrounds, header/footer |
 | ✨ | **Branding** | Upload logos, favicons, icons |
-| 👥 | **Users** | Manage accounts, approve password resets |
+| 👥 | **Users** | Manage accounts, change passwords |
 | 🌐 | **Network** | Configure IP settings, enable mDNS |
 | ⚙️ | **Settings** | Page title, grid layout, refresh |
-| 🔧 | **System** | Logs, diagnostics, backup/restore |
+| 🔧 | **System** | Logs, diagnostics, Pi controls, backup/restore |
 
 <br>
 
@@ -235,151 +239,36 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.1.4
+## 🆕 What's New in v1.1.5
 
 <table>
 <tr>
 <td>
 
-### 📱 Mobile First
+### 🍓 Raspberry Pi Support
 
-- Touch-friendly 44px button targets
-- Safe-area-insets for notched phones
-- Admin tabs: icon-only on mobile
-- 16px fonts prevent iOS zoom
-- Touch feedback animations
+- Auto-detection of Pi hardware
+- Temperature monitoring with alerts
+- Throttling/voltage warnings
+- Change hostname from web UI
+- Reboot/Shutdown controls
+- dhcpcd network configuration
 
 </td>
 <td>
 
-### 🔒 Security
+### 🔒 Security & Mobile
 
 - Login rate limiting (5 attempts)
 - 15-minute IP lockout
 - Timing-attack resistant auth
-- Failed attempts logged
-
-### ♿ Accessibility
-
-- Reduced motion support
-- Print stylesheet added
+- Touch-friendly 44px buttons
+- Safe-area-insets for notched phones
+- Admin tabs: icon-only on mobile
 
 </td>
 </tr>
 </table>
-
-<br>
-
----
-
-<br>
-
-## 🆕 What's New in v1.1.1
-
-<table>
-<tr>
-<td>
-
-### Fixed
-
-- ✅ Config permission errors now show friendly message
-- ✅ Branding uploads handle save errors gracefully
-- ✅ No more crashes on read-only config files
-
-</td>
-<td>
-
-### Added
-
-- ⚠️ Warning banner when config not writable
-- 🔧 Fix instructions shown in System tab
-- 📋 `check_config_writable()` function
-
-</td>
-</tr>
-</table>
-
-<br>
-
----
-
-<br>
-
-## 🆕 What's New in v1.1.0
-
-<table>
-<tr>
-<td>
-
-### Added
-
-- 📦 Configuration import/export with backup
-- 👥 Preserve users option during import
-- 🖥️ Modern terminal UI with colors
-- 📊 Enhanced help page with device diagnostics
-- 📱 Mobile-responsive help layout
-- 🎨 `--no-color` terminal flag
-
-</td>
-<td>
-
-### Fixed
-
-- ✅ Firmware upload empty file error
-- ✅ Connectivity report submission
-- ✅ Security warning logic
-
-### Improved
-
-- 📈 Terminal shows network info at startup
-- 🔒 Smarter default password detection
-- 📁 Modular codebase structure
-
-</td>
-</tr>
-</table>
-
-<br>
-
----
-
-<br>
-
-## 📋 v1.0.0 — Foundation Release
-
-<details>
-<summary><b>View all initial features</b></summary>
-
-<br>
-
-### iFrame Management
-- URL and embed code support
-- External URL toggle per frame
-- Height, width, zoom controls (25-200%)
-- Border styles and colors
-- Show/hide headers and URL bars
-
-### Network Features
-- Static IP / DHCP configuration
-- mDNS / Bonjour support (`.local` hostnames)
-- Cross-platform interface detection
-- Connectivity testing (browser + server)
-- User report submission
-
-### User Management
-- Admin and regular user roles
-- Secure session authentication
-- Forgot password workflow
-- Password reset queue for admins
-
-### Security
-- SHA-256 password hashing
-- 256-bit session tokens
-- HttpOnly + SameSite cookies
-- iFrame sandboxing
-- Local IP validation
-
-</details>
 
 <br>
 
@@ -394,7 +283,7 @@ http://localhost:8080
 | Windows | ✅ | `python multi_frames.py` |
 | macOS | ✅ | `python3 multi_frames.py` |
 | Linux | ✅ | `sudo ./install.sh` |
-| Raspberry Pi | ✅ | Systemd service included |
+| Raspberry Pi | ✅ | Auto-detected, systemd service included |
 | Docker | ✅ | Dockerfile provided |
 
 <br>
@@ -403,15 +292,247 @@ http://localhost:8080
 
 <br>
 
-## 📂 Files
+## 📂 File Structure
 
+Multi-Frames is available in two formats:
+
+### Single-File Distribution (Recommended)
 ```
-multi_frames.py      →  Main server (deploy this)
-install.sh           →  Linux service installer
-README.md            →  Documentation
-CHANGELOG.md         →  Version history
-multi_frames/        →  Modular source code
+multi_frames.py          # Complete server in one file (~8,600 lines)
 ```
+
+### Modular Package (For Development)
+```
+multi_frames/
+├── __init__.py          # Version info
+├── __main__.py          # Entry point
+├── config.py            # Configuration management
+├── auth.py              # Authentication & sessions
+├── logger.py            # Server logging
+├── cli.py               # Terminal UI
+├── network/
+│   ├── interfaces.py    # Network detection
+│   ├── mdns.py          # mDNS/Bonjour
+│   └── commands.py      # TCP/UDP/Telnet
+├── utils/
+│   ├── html.py          # HTML utilities
+│   ├── validation.py    # IP/URL validation
+│   └── multipart.py     # Form parsing
+└── templates/           # HTML templates
+```
+
+<br>
+
+---
+
+<br>
+
+## 📖 Configuration
+
+All configuration is stored in `multi_frames_config.json`:
+
+```json
+{
+  "users": {
+    "admin": {
+      "password_hash": "...",
+      "is_admin": true
+    }
+  },
+  "iframes": [
+    {
+      "name": "Local Service",
+      "url": "http://192.168.1.100:8000",
+      "height": 400
+    }
+  ],
+  "widgets": [
+    {
+      "type": "clock",
+      "enabled": true,
+      "size": "medium"
+    }
+  ],
+  "settings": {
+    "page_title": "Dashboard",
+    "refresh_interval": 0,
+    "grid_columns": 2
+  }
+}
+```
+
+### Configuration Import/Export
+
+**Export:** Admin → System → Download (creates timestamped JSON backup)
+
+**Import:** Admin → System → Configuration Import
+- Upload a previously exported `.json` file
+- Option to preserve current users and passwords
+- Deep merges with defaults to ensure all fields exist
+
+<br>
+
+---
+
+<br>
+
+## 🌐 Network Configuration
+
+Cross-platform network settings (requires admin/root privileges):
+
+| Platform | Method | Requirements |
+|----------|--------|--------------|
+| **Windows** | `netsh` commands | Run as Administrator |
+| **macOS** | `networksetup` commands | Run with `sudo` |
+| **Linux** | netplan or interfaces | Run with `sudo` |
+| **Raspberry Pi** | dhcpcd.conf | Run with `sudo` |
+
+### mDNS / Bonjour
+
+Access your server via friendly hostname:
+
+```bash
+# Install zeroconf (optional)
+pip install zeroconf
+
+# Access via
+http://multi-frames.local:8080
+```
+
+<br>
+
+---
+
+<br>
+
+## 🔧 Running as a Service
+
+### Linux / Raspberry Pi (systemd)
+
+Use the included installer:
+
+```bash
+sudo ./install.sh --port 80
+```
+
+Or manually create `/etc/systemd/system/multi-frames.service`:
+
+```ini
+[Unit]
+Description=Multi-Frames Dashboard Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/multi-frames
+ExecStart=/usr/bin/python3 /opt/multi-frames/multi_frames.py --host 0.0.0.0 --port 80
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable multi-frames
+sudo systemctl start multi-frames
+```
+
+### Service Commands
+
+```bash
+sudo systemctl status multi-frames    # Check status
+sudo systemctl restart multi-frames   # Restart
+sudo journalctl -u multi-frames -f    # View logs
+```
+
+### Docker
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY multi_frames.py .
+EXPOSE 8080
+CMD ["python", "multi_frames.py", "--host", "0.0.0.0", "--port", "8080"]
+```
+
+```bash
+docker build -t multi-frames .
+docker run -d -p 8080:8080 -v $(pwd)/config:/app multi-frames
+```
+
+<br>
+
+---
+
+<br>
+
+## 🔌 API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Main dashboard |
+| GET | `/login` | Login page |
+| POST | `/login` | Authenticate |
+| GET | `/logout` | End session |
+| GET | `/admin` | Admin panel |
+| GET | `/help` | Help & diagnostics |
+| GET | `/api/ping` | Connectivity check |
+| GET | `/api/pi-status` | Raspberry Pi info |
+| POST | `/api/send-command` | Send network command |
+
+<br>
+
+---
+
+<br>
+
+## 🛠️ Troubleshooting
+
+**Port already in use:**
+```bash
+lsof -i :8080           # Linux/Mac
+netstat -ano | findstr :8080  # Windows
+```
+
+**Permission denied on port 80:**
+```bash
+sudo python3 multi_frames.py --port 80
+```
+
+**Config file errors:**
+Delete `multi_frames_config.json` to reset to defaults.
+
+**mDNS not working:**
+```bash
+pip install zeroconf    # Install the library
+# Windows: Install Bonjour Print Services
+# Linux: sudo apt install avahi-daemon
+```
+
+<br>
+
+---
+
+<br>
+
+## 📋 Version History
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
+
+| Version | Date | Highlights |
+|---------|------|------------|
+| **1.1.5** | 2025-01-25 | Raspberry Pi auto-detection, temperature monitoring, Pi controls |
+| **1.1.4** | 2025-01-25 | Fixed iframe back button navigation |
+| **1.1.3** | 2025-01-25 | Password change functionality |
+| **1.1.2** | 2025-01-25 | Mobile CSS optimization, login rate limiting |
+| **1.1.1** | 2025-01-25 | Config permission error handling |
+| **1.1.0** | 2025-01-25 | Config import/export, modern terminal UI |
+| **1.0.0** | 2025-01-25 | Initial release |
 
 <br>
 

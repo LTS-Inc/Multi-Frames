@@ -5,6 +5,31 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2025-01-25
+
+### Added
+- **Raspberry Pi Auto-Detection**: Automatically detects when running on a Raspberry Pi
+- **Pi System Info Panel**: Shows model, temperature, memory, hostname, throttling status
+- **Temperature Monitoring**: Color-coded temperature display with status indicators (Normal/Warm/Hot/Critical)
+- **Throttling Warnings**: Shows under-voltage, frequency capping, and thermal throttling alerts
+- **Change Hostname**: Change Raspberry Pi hostname directly from the web interface
+- **Pi Reboot/Shutdown**: Reboot or shutdown the Pi from Admin → System panel
+- **dhcpcd Support**: Network configuration via dhcpcd.conf (Raspberry Pi OS default)
+- `/api/pi-status` endpoint: Get Pi info via JSON API
+- `/api/ping` endpoint: Simple connectivity check endpoint
+- Auto-reconnect after Pi reboot (polls for server return)
+
+### Changed
+- Network config detection now prioritizes dhcpcd for Raspberry Pi OS
+- System Information section now shows Pi-specific hardware details when detected
+- Linux network configuration uses dhcpcd when available
+
+### Technical
+- `get_raspberry_pi_info()`: Comprehensive Pi detection via /proc/device-tree, /proc/cpuinfo, vcgencmd
+- `apply_pi_network_dhcpcd()`: Configure static IP via /etc/dhcpcd.conf
+- `set_pi_hostname()`: Update /etc/hostname and /etc/hosts
+- `render_raspberry_pi_section()`: Dedicated UI component for Pi info
+
 ## [1.1.4] - 2025-01-25
 
 ### Fixed

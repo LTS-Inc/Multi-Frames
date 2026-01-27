@@ -133,7 +133,7 @@ def main():
     parser = argparse.ArgumentParser(description='Build Multi-Frames distribution')
     parser.add_argument('--output', '-o', default='dist/multi_frames.py',
                         help='Output file path')
-    parser.add_argument('--version', '-v', default='1.1.0',
+    parser.add_argument('--version', '-v', default='1.1.13',
                         help='Version string')
     
     args = parser.parse_args()

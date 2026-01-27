@@ -575,9 +575,6 @@ Nice=-5
 IOSchedulingClass=best-effort
 IOSchedulingPriority=0
 
-# Watchdog: restart if unresponsive for 5 min
-WatchdogSec=300
-
 # Memory limits for Pi
 MemoryMax=256M
 MemoryHigh=192M"

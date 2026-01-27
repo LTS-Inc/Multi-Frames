@@ -193,7 +193,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.11"
+VERSION = "1.1.2"
 VERSION_DATE = "2026-01-26"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -762,14 +762,49 @@ def get_raspberry_pi_info():
                         }
             except: pass
             
-            # Get total memory
+            # Get memory info (used/total in MB)
             if os.path.exists('/proc/meminfo'):
+                mem_total_kb = 0
+                mem_available_kb = 0
+                mem_free_kb = 0
                 with open('/proc/meminfo', 'r') as f:
                     for line in f:
-                        if line.startswith('MemTotal'):
-                            mem_kb = int(line.split()[1])
-                            pi_info['memory_total'] = round(mem_kb / 1024)  # MB
-                            break
+                        if line.startswith('MemTotal:'):
+                            mem_total_kb = int(line.split()[1])
+                        elif line.startswith('MemAvailable:'):
+                            mem_available_kb = int(line.split()[1])
+                        elif line.startswith('MemFree:'):
+                            mem_free_kb = int(line.split()[1])
+
+                if mem_total_kb > 0:
+                    pi_info['memory_total'] = round(mem_total_kb / 1024)  # MB
+                    # Use MemAvailable if present (more accurate), otherwise use MemFree
+                    available_kb = mem_available_kb if mem_available_kb > 0 else mem_free_kb
+                    pi_info['memory_used'] = round((mem_total_kb - available_kb) / 1024)  # MB
+                    pi_info['memory_free'] = round(available_kb / 1024)  # MB
+
+            # Get disk usage info (in GB)
+            try:
+                statvfs = os.statvfs('/')
+                disk_total_bytes = statvfs.f_frsize * statvfs.f_blocks
+                disk_free_bytes = statvfs.f_frsize * statvfs.f_bavail
+                disk_used_bytes = disk_total_bytes - disk_free_bytes
+                pi_info['disk_total'] = round(disk_total_bytes / (1024**3), 1)  # GB
+                pi_info['disk_used'] = round(disk_used_bytes / (1024**3), 1)  # GB
+                pi_info['disk_free'] = round(disk_free_bytes / (1024**3), 1)  # GB
+            except: pass
+
+            # Get voltage info using vcgencmd
+            try:
+                result = subprocess.run(['vcgencmd', 'measure_volts', 'core'],
+                                      capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    # Output: volt=1.2000V
+                    volt_str = result.stdout.strip()
+                    if 'volt=' in volt_str:
+                        volt = volt_str.split('=')[1].replace('V', '').strip()
+                        pi_info['voltage_core'] = float(volt)
+            except: pass
             
             # Determine boot config file location
             if os.path.exists('/boot/firmware/config.txt'):
@@ -7594,18 +7629,18 @@ def render_status_dashboard(config):
                 </div>
                 <div style="background:var(--bg-primary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
                     <div style="font-size:1.5rem;">💾</div>
-                    <div style="font-size:1.25rem;font-weight:700;">{pi_info.get('memory_percent', 0):.0f}%</div>
-                    <div style="font-size:0.75rem;color:var(--text-secondary);">Memory Used</div>
+                    <div style="font-size:1.1rem;font-weight:700;">{pi_info.get('memory_used', 0)}<span style="font-size:0.75rem;font-weight:400;">/{pi_info.get('memory_total', 0)} MB</span></div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);">Memory</div>
                 </div>
                 <div style="background:var(--bg-primary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
                     <div style="font-size:1.5rem;">💽</div>
-                    <div style="font-size:1.25rem;font-weight:700;">{pi_info.get('disk_percent', 0):.0f}%</div>
-                    <div style="font-size:0.75rem;color:var(--text-secondary);">Disk Used</div>
+                    <div style="font-size:1.1rem;font-weight:700;">{pi_info.get('disk_used', 0)}<span style="font-size:0.75rem;font-weight:400;">/{pi_info.get('disk_total', 0)} GB</span></div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);">Disk</div>
                 </div>
                 <div style="background:var(--bg-primary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
                     <div style="font-size:1.5rem;">⚡</div>
-                    <div style="font-size:1.25rem;font-weight:700;">{"OK" if not pi_info.get('throttled') else "!"}</div>
-                    <div style="font-size:0.75rem;color:var(--text-secondary);">Power</div>
+                    <div style="font-size:1.1rem;font-weight:700;color:{"#22c55e" if not pi_info.get('throttled', {}).get('under_voltage') else "#ef4444"}">{pi_info.get('voltage_core', 'N/A')}<span style="font-size:0.75rem;font-weight:400;">V</span></div>
+                    <div style="font-size:0.75rem;color:var(--text-secondary);">Core Voltage</div>
                 </div>
             </div>
             {throttle_status}

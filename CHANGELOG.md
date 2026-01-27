@@ -5,6 +5,38 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.13] - 2026-01-27
+
+### Fixed
+- **Throttle Alert Accuracy**: Fixed false "Throttling Active" warning that appeared even when `vcgencmd get_throttled` returned `0x0`
+  - Now properly checks individual throttle flags (bits 0-3 for current, bits 16-19 for past issues)
+  - Shows red warning only for active throttling issues
+  - Shows orange warning for past issues (since boot)
+  - No warning displayed when system is healthy (0x0)
+
+## [1.1.12] - 2026-01-27
+
+### Fixed
+- **Raspberry Pi Health Widgets**: Fixed widgets showing 0% instead of real data
+  - Memory widget now shows used/total in MB (e.g., `512/2048 MB`)
+  - Disk widget now shows used/total in GB (e.g., `12.5/32.0 GB`)
+  - Power widget now shows actual core voltage with color indicator
+- **Server Reset Issue**: Removed `WatchdogSec=300` from systemd service to prevent 5-minute automatic restarts
+
+### Added
+- Real-time memory usage tracking (`memory_used`, `memory_free` fields)
+- Real-time disk usage tracking (`disk_total`, `disk_used`, `disk_free` fields)
+- Core voltage monitoring via `vcgencmd measure_volts core`
+
+## [1.1.11] - 2026-01-26
+
+### Added
+- **Watchdog Tab**: New admin panel tab with 30-day server uptime tracking
+  - 24-hour, 7-day, and 30-day uptime percentages
+  - Visual uptime chart with daily breakdown
+  - Crash and restart event logging
+  - Session duration tracking
+
 ## [1.1.10] - 2025-01-26
 
 ### Added

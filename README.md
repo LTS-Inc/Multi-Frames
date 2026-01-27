@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.1.10-2025--01--26-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.1.13-2026--01--27-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -239,30 +239,30 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.1.10
+## 🆕 What's New in v1.1.13
 
 <table>
 <tr>
 <td>
 
-### 📊 Modern Admin Dashboard
+### 🍓 Raspberry Pi Health Fixes
 
-- Status banner with health indicator
-- Raspberry Pi monitoring card
-- Stats cards (requests, errors, memory)
-- Quick info bar (hostname, IP, port)
-- Tabbed logs viewer
+- Memory widget shows real-time MB usage
+- Disk widget shows real-time GB usage
+- Power widget shows core voltage
+- Accurate throttle alerts via vcgencmd
+- No more false "Throttling Active" warnings
 
 </td>
 <td>
 
-### 🔧 Improved Organization
+### 🔧 Stability Improvements
 
-- Status dashboard always visible
-- Modern tabbed log viewer
-- Streamlined System panel
-- Visual connectivity testing
-- Cleaner UI hierarchy
+- Removed 5-minute auto-restart bug
+- Server now runs 24/7 reliably
+- 30-day uptime tracking (Watchdog tab)
+- Crash and restart event logging
+- Proper systemd service configuration
 
 </td>
 </tr>
@@ -524,6 +524,9 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.1.13** | 2026-01-27 | Fixed false throttle alerts, accurate vcgencmd integration |
+| **1.1.12** | 2026-01-27 | Real-time Pi health widgets (MB/GB), core voltage display, server reset fix |
+| **1.1.11** | 2026-01-26 | Watchdog tab with 30-day uptime tracking |
 | **1.1.10** | 2025-01-26 | Modern status dashboard, Pi monitoring card, tabbed logs viewer |
 | **1.1.9** | 2025-01-26 | Git clone URL field, auto-parse GitHub URLs, improved update UI |
 | **1.1.8** | 2025-01-26 | Enhanced Pi install script, kiosk mode, WiFi fix, screen blanking |

@@ -7604,13 +7604,47 @@ def render_status_dashboard(config):
         temp_icon = '🌡️' if temp < 60 else '🔥' if temp < 70 else '🌋'
         
         throttle_status = ""
-        if pi_info.get('throttled'):
-            throttle_status = f'''
+        throttle_data = pi_info.get('throttled')
+        if throttle_data:
+            # Check for CURRENT throttling issues (bits 0-3)
+            current_issues = []
+            if throttle_data.get('under_voltage'):
+                current_issues.append('⚡ Under-voltage detected')
+            if throttle_data.get('freq_capped'):
+                current_issues.append('📉 Frequency capped')
+            if throttle_data.get('throttled'):
+                current_issues.append('🌡️ CPU throttled')
+            if throttle_data.get('soft_temp_limit'):
+                current_issues.append('🔥 Soft temperature limit')
+
+            # Check for PAST issues (bits 16-19)
+            past_issues = []
+            if throttle_data.get('under_voltage_occurred'):
+                past_issues.append('Under-voltage occurred')
+            if throttle_data.get('freq_capped_occurred'):
+                past_issues.append('Frequency was capped')
+            if throttle_data.get('throttled_occurred'):
+                past_issues.append('Throttling occurred')
+            if throttle_data.get('soft_temp_occurred'):
+                past_issues.append('Soft temp limit reached')
+
+            if current_issues:
+                # Active throttling - show red warning
+                throttle_status = f'''
             <div style="background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:0.5rem;padding:0.75rem;margin-top:1rem;">
                 <span style="color:#ef4444;font-weight:600;">⚠️ Throttling Active</span>
-                <span style="color:var(--text-secondary);font-size:0.85rem;margin-left:0.5rem;">{escape_html(pi_info.get('throttle_reason', 'Check power supply'))}</span>
+                <span style="color:var(--text-secondary);font-size:0.85rem;margin-left:0.5rem;">{escape_html(', '.join(current_issues))}</span>
             </div>
             '''
+            elif past_issues:
+                # Past issues only - show orange warning
+                throttle_status = f'''
+            <div style="background:rgba(245,158,11,0.15);border:1px solid #f59e0b;border-radius:0.5rem;padding:0.75rem;margin-top:1rem;">
+                <span style="color:#f59e0b;font-weight:600;">⚠️ Past Issues Detected</span>
+                <span style="color:var(--text-secondary);font-size:0.85rem;margin-left:0.5rem;">{escape_html(', '.join(past_issues))} (since boot)</span>
+            </div>
+            '''
+            # If throttle_data exists but no issues (0x0), show nothing - system is healthy
         
         pi_section = f'''
         <div style="background:linear-gradient(135deg, #c0194820 0%, #c0194810 100%);border:1px solid #c0194840;border-radius:0.75rem;padding:1.25rem;margin-bottom:1.5rem;">

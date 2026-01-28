@@ -5112,9 +5112,9 @@ def render_main_page(user, config):
             else:
                 # Regular iframe with URL
                 if wrapper_style_str:
-                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr} onload="setIframeStatus({i}, true)" onerror="setIframeStatus({i}, false)"></iframe></div>'
+                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe></div>'
                 else:
-                    iframe_inner = f'<iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr} onload="setIframeStatus({i}, true)" onerror="setIframeStatus({i}, false)"></iframe>'
+                    iframe_inner = f'<iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe>'
             
             # Fallback placeholder (hidden by default)
             fallback_div = f'<div id="fallback-{i}" class="iframe-fallback" style="display:none;height:{height}px;"></div>'
@@ -5144,11 +5144,28 @@ def render_main_page(user, config):
             fallback_js = """
             var fallbackConfig = { enabled: false };
             """
-        
+
+        # Build iframe URL list for connectivity testing
+        iframe_test_data = []
+        for i, iframe in enumerate(iframes):
+            if not iframe.get("use_embed_code", False):
+                iframe_test_data.append({
+                    "index": i,
+                    "url": iframe.get("url", ""),
+                    "name": iframe.get("name", f"Frame {i+1}")
+                })
+
+        import json as json_module
+        iframe_test_json = json_module.dumps(iframe_test_data)
+
         status_script = f"""
         <script>
         {fallback_js}
-        
+
+        // Iframe URLs to test for connectivity
+        var iframeTestData = {iframe_test_json};
+        var apiBase = window.location.origin;
+
         // Prevent browser back button from navigating away when iframes are present
         // This creates a history entry so back button stays on this page
         (function() {{
@@ -5195,45 +5212,103 @@ def render_main_page(user, config):
             }}
         }}
         
-        function setIframeStatus(index, success) {{
+        function setIframeStatus(index, status, reason) {{
             var dot = document.getElementById('status-' + index);
             if (dot) {{
-                dot.classList.remove('loading');
-                if (success) {{
+                dot.classList.remove('loading', 'connected', 'error', 'warning');
+                if (status === 'connected') {{
                     dot.classList.add('connected');
-                    dot.classList.remove('error');
                     dot.title = 'Connected';
+                    dot.textContent = '●';
                     hideFallback(index);
+                }} else if (status === 'warning') {{
+                    dot.classList.add('warning');
+                    dot.title = reason || 'May be blocked';
+                    dot.textContent = '●';
+                    // Don't show fallback for warnings - iframe might still work
                 }} else {{
                     dot.classList.add('error');
-                    dot.classList.remove('connected');
-                    dot.title = 'Connection error';
+                    dot.title = reason || 'Connection error';
+                    dot.textContent = '●';
                     showFallback(index);
                 }}
             }}
         }}
-        
-        // Periodic connectivity check
-        function checkIframeConnectivity() {{
-            var iframes = document.querySelectorAll('iframe[id^="iframe-"]');
-            iframes.forEach(function(iframe) {{
-                var index = iframe.id.replace('iframe-', '');
-                var dot = document.getElementById('status-' + index);
-                if (dot && dot.classList.contains('connected')) {{
-                    try {{
-                        if (iframe.contentWindow) {{
-                            dot.classList.add('connected');
-                            dot.classList.remove('error');
-                        }}
-                    }} catch(e) {{
-                        // Cross-origin, but that's okay - it loaded
+
+        // Test a single iframe URL using server-side connectivity test
+        function testIframeUrl(index, url, name) {{
+            var dot = document.getElementById('status-' + index);
+            if (!dot) return;
+
+            fetch(apiBase + '/api/connectivity-test-url', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ url: url, index: index }})
+            }})
+            .then(function(response) {{ return response.json(); }})
+            .then(function(data) {{
+                var result = data.result || {{}};
+                var status = 'connected';
+                var reason = '';
+
+                // Check for X-Frame-Options that would block embedding
+                if (result.x_frame_options) {{
+                    var xfo = result.x_frame_options.toUpperCase();
+                    if (xfo === 'DENY' || xfo === 'SAMEORIGIN') {{
+                        status = 'warning';
+                        reason = 'Blocked by X-Frame-Options: ' + xfo;
                     }}
                 }}
+
+                // Check for CSP frame-ancestors that would block embedding
+                if (result.csp_frame_ancestors) {{
+                    var csp = result.csp_frame_ancestors.toLowerCase();
+                    if (csp.includes("'none'") || (csp.includes("'self'") && !csp.includes('*'))) {{
+                        status = 'warning';
+                        reason = 'Blocked by Content-Security-Policy';
+                    }}
+                }}
+
+                // Handle error cases
+                if (result.status === 'error') {{
+                    status = 'error';
+                    reason = result.error || 'Connection failed';
+                }}
+
+                setIframeStatus(index, status, reason);
+            }})
+            .catch(function(err) {{
+                // If server test fails, mark as error
+                setIframeStatus(index, 'error', 'Test failed');
             }});
         }}
-        
-        // Check connectivity every 30 seconds
-        setInterval(checkIframeConnectivity, 30000);
+
+        // Test all iframe URLs on page load
+        function testAllIframes() {{
+            iframeTestData.forEach(function(item, i) {{
+                // Stagger tests by 200ms to avoid overwhelming the server
+                setTimeout(function() {{
+                    testIframeUrl(item.index, item.url, item.name);
+                }}, i * 200);
+            }});
+        }}
+
+        // Run connectivity test on page load
+        if (iframeTestData.length > 0) {{
+            // Wait for page to finish loading, then test
+            if (document.readyState === 'complete') {{
+                testAllIframes();
+            }} else {{
+                window.addEventListener('load', testAllIframes);
+            }}
+        }}
+
+        // Periodic connectivity check every 60 seconds
+        setInterval(function() {{
+            if (iframeTestData.length > 0) {{
+                testAllIframes();
+            }}
+        }}, 60000);
         </script>
         """
         

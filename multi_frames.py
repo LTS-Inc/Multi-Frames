@@ -415,13 +415,52 @@ class UptimeTracker:
         self.last_check = datetime.now()
         self._initialized = True
 
-        # Record server start event
-        self._record_event(config, 'start', 'Server started')
-
-        # Calculate and record any downtime since last session
+        # Check for unexpected shutdown from previous session
         watchdog_data = config.get('watchdog', {})
         last_shutdown = watchdog_data.get('last_shutdown')
-        if last_shutdown:
+        last_update = watchdog_data.get('last_update')
+        prev_session_start = watchdog_data.get('current_session_start')
+
+        # Detect unexpected shutdown: last_update exists but no last_shutdown after it
+        # This means the server was killed without graceful shutdown
+        unexpected_shutdown = False
+        downtime_start = None
+
+        if last_update:
+            try:
+                last_update_dt = datetime.fromisoformat(last_update)
+
+                if last_shutdown:
+                    last_shutdown_dt = datetime.fromisoformat(last_shutdown)
+                    # If last_update is after last_shutdown, server crashed after restart
+                    if last_update_dt > last_shutdown_dt:
+                        unexpected_shutdown = True
+                        downtime_start = last_update_dt
+                else:
+                    # No shutdown recorded but we have last_update - unexpected shutdown
+                    unexpected_shutdown = True
+                    downtime_start = last_update_dt
+            except:
+                pass
+
+        # Record unexpected shutdown event
+        if unexpected_shutdown and downtime_start:
+            downtime_seconds = (self.current_session_start - downtime_start).total_seconds()
+            if downtime_seconds > 0 and downtime_seconds < 86400 * 30:  # Less than 30 days
+                self._record_event(config, 'crash', 'Server stopped unexpectedly', severity='critical')
+                self._record_event(config, 'downtime', f'Server was down for {self._format_duration(int(downtime_seconds))}',
+                                  extra={'downtime_seconds': int(downtime_seconds)})
+                # Record crash in daily stats
+                today = datetime.now().strftime('%Y-%m-%d')
+                config.setdefault('watchdog', {})
+                daily_uptime = config['watchdog'].setdefault('daily_uptime', {})
+                if today not in daily_uptime:
+                    daily_uptime[today] = {'uptime_seconds': 0, 'downtime_seconds': 0, 'crashes': 0, 'restarts': 0}
+                daily_uptime[today]['crashes'] = daily_uptime[today].get('crashes', 0) + 1
+                daily_uptime[today]['downtime_seconds'] = daily_uptime[today].get('downtime_seconds', 0) + int(downtime_seconds)
+
+        # If graceful shutdown was recorded, calculate downtime from that
+        elif last_shutdown and not unexpected_shutdown:
             try:
                 last_shutdown_dt = datetime.fromisoformat(last_shutdown)
                 downtime_seconds = (self.current_session_start - last_shutdown_dt).total_seconds()
@@ -430,6 +469,13 @@ class UptimeTracker:
                                       extra={'downtime_seconds': int(downtime_seconds)})
             except:
                 pass
+
+        # Record server start event
+        self._record_event(config, 'start', 'Server started')
+
+        # Clear last_shutdown so we can detect future unexpected shutdowns
+        config.setdefault('watchdog', {})
+        config['watchdog']['last_shutdown'] = None
 
     def record_shutdown(self, config):
         """Record graceful shutdown."""

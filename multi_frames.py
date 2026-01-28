@@ -5060,6 +5060,7 @@ def render_main_page(user, config):
             width = iframe.get("width", 100)  # percentage
             show_url = iframe.get("show_url", True)
             show_header = iframe.get("show_header", True)
+            show_status = iframe.get("show_status", True)  # Show connectivity status icon
             header_text = escape_html(iframe.get("header_text", ""))  # Custom header text, empty = use name
             border_style = iframe.get("border_style", "default")  # default, none, thin, thick, rounded
             border_color = iframe.get("border_color", "")
@@ -5115,9 +5116,10 @@ def render_main_page(user, config):
             iframe_style_str = ';'.join(iframe_styles)
             wrapper_style_str = ';'.join(wrapper_styles) if wrapper_styles else ''
             
-            # Header visibility with status dot
+            # Header visibility with optional status dot
             if show_header:
-                header_html = f'<h3><span class="title-left"><span class="status-dot {"connected" if use_embed_code else "loading"}" id="status-{i}" title="{"Embed Code" if use_embed_code else "Connecting..."}"></span>{display_title}</span> {url_display}</h3>'
+                status_dot_html = f'<span class="status-dot {"connected" if use_embed_code else "loading"}" id="status-{i}" title="{"Embed Code" if use_embed_code else "Connecting..."}"></span>' if show_status else ''
+                header_html = f'<h3><span class="title-left">{status_dot_html}{display_title}</span> {url_display}</h3>'
             else:
                 header_html = ''
                 if 'border-radius' not in card_style_str:
@@ -5584,6 +5586,7 @@ def render_admin_page(user, config, message=None, error=None):
         zoom = iframe.get("zoom", 100)
         show_url = iframe.get("show_url", True)
         show_header = iframe.get("show_header", True)
+        show_status = iframe.get("show_status", True)
         header_text = escape_html(iframe.get("header_text", ""))
         border_style = iframe.get("border_style", "default")
         border_color = escape_html(iframe.get("border_color", ""))
@@ -5698,6 +5701,13 @@ def render_admin_page(user, config, message=None, error=None):
                                 <select name="show_url">
                                     <option value="1" {"selected" if show_url else ""}>Yes</option>
                                     <option value="0" {"selected" if not show_url else ""}>No (hide IP)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Status Icon</label>
+                                <select name="show_status">
+                                    <option value="1" {"selected" if show_status else ""}>Show</option>
+                                    <option value="0" {"selected" if not show_status else ""}>Hide</option>
                                 </select>
                             </div>
                         </div>
@@ -5999,6 +6009,7 @@ def render_admin_page(user, config, message=None, error=None):
                                 <div class="form-group"><label>Zoom (%)</label><input type="number" name="zoom" value="100" min="25" max="200" step="5"></div>
                                 <div class="form-group"><label>Show Header</label><select name="show_header"><option value="1" selected>Yes</option><option value="0">No</option></select></div>
                                 <div class="form-group"><label>Show URL</label><select name="show_url"><option value="1" selected>Yes</option><option value="0">No (hide IP)</option></select></div>
+                                <div class="form-group"><label>Status Icon</label><select name="show_status"><option value="1" selected>Show</option><option value="0">Hide</option></select></div>
                             </div>
                             <div class="form-group" style="margin-bottom:1rem;">
                                 <label>Header Text (leave empty to use Name)</label>
@@ -9217,6 +9228,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             zoom = int(data.get('zoom', 100)) if data.get('zoom') else 100
             show_url = data.get('show_url', '1') == '1'
             show_header = data.get('show_header', '1') == '1'
+            show_status = data.get('show_status', '1') == '1'
             header_text = data.get('header_text', '').strip()
             border_style = data.get('border_style', 'default')
             border_color = data.get('border_color', '').strip()
@@ -9244,6 +9256,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         "zoom": max(25, min(200, zoom)),
                         "show_url": show_url,
                         "show_header": show_header,
+                        "show_status": show_status,
                         "header_text": header_text[:100],
                         "border_style": border_style,
                         "border_color": border_color[:20],
@@ -9267,6 +9280,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         "zoom": max(25, min(200, zoom)),
                         "show_url": show_url,
                         "show_header": show_header,
+                        "show_status": show_status,
                         "header_text": header_text[:100],
                         "border_style": border_style,
                         "border_color": border_color[:20],
@@ -9302,6 +9316,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 zoom = int(data.get('zoom', 100))
                 show_url = data.get('show_url') == '1'
                 show_header = data.get('show_header') == '1'
+                show_status = data.get('show_status') == '1'
                 header_text = data.get('header_text', '').strip()
                 border_style = data.get('border_style', 'default')
                 border_color = data.get('border_color', '').strip()
@@ -9336,6 +9351,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         "zoom": max(25, min(200, zoom)),
                         "show_url": show_url,
                         "show_header": show_header,
+                        "show_status": show_status,
                         "header_text": header_text[:100],
                         "border_style": border_style,
                         "border_color": border_color[:20],

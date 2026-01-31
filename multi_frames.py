@@ -9181,7 +9181,6 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     # Check Content-Security-Policy for frame-ancestors
                     csp = response.headers.get('Content-Security-Policy', '')
                     if 'frame-ancestors' in csp.lower():
-                        import re
                         match = re.search(r'frame-ancestors\s+([^;]+)', csp, re.IGNORECASE)
                         if match:
                             result['csp_frame_ancestors'] = match.group(1).strip()
@@ -10115,7 +10114,6 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     csp = response.headers.get('Content-Security-Policy', '')
                     if 'frame-ancestors' in csp.lower():
                         # Extract the frame-ancestors directive
-                        import re
                         match = re.search(r'frame-ancestors\s+([^;]+)', csp, re.IGNORECASE)
                         if match:
                             result['csp_frame_ancestors'] = match.group(1).strip()

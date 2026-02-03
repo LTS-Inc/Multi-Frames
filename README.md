@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.1.15-2026--02--03-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.2.0-2026--02--03-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -25,7 +25,7 @@ Built for home dashboards, kiosks, and digital signage
 
 <br>
 
-[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v115) • [Documentation](#-configuration)
+[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v120) • [Documentation](#-configuration)
 
 </div>
 
@@ -239,7 +239,7 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.1.15
+## 🆕 What's New in v1.2.0
 
 <table>
 <tr>
@@ -256,13 +256,13 @@ http://localhost:8080
 </td>
 <td>
 
-### 📡 Cloud Dashboard
+### 🎨 Modern Cloud Dashboard
 
-- View all devices in one place
-- Push configs to multiple devices
-- Device health monitoring
-- Secure device registration
-- Works from any browser
+- Responsive sidebar navigation
+- Device stats cards at a glance
+- Custom branding (logo, colors)
+- Dark mode support
+- Mobile-friendly hamburger menu
 
 </td>
 </tr>
@@ -524,6 +524,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.2.0** | 2026-02-03 | Modern cloud dashboard, branding customization, responsive UI |
 | **1.1.15** | 2026-02-03 | Cloud remote management, Google Workspace auth, config sync |
 | **1.1.14** | 2026-02-03 | Simplified connectivity test, status icon toggle, bug fixes |
 | **1.1.13** | 2026-01-27 | Fixed false throttle alerts, accurate vcgencmd integration |

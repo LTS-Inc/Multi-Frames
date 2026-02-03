@@ -5,6 +5,28 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-02-03
+
+### Added
+- **Modern Cloud Dashboard**: Completely redesigned cloud management interface
+  - Inter font family with modern typography
+  - Responsive sidebar navigation (collapses on mobile)
+  - Stats cards showing total/online/offline device counts
+  - Device cards with hover effects and status indicators
+  - Toast notifications for user feedback
+- **Branding Customization**: Customize the cloud dashboard appearance
+  - Company name setting
+  - Logo URL upload
+  - Primary and accent color pickers
+  - Dark mode toggle
+  - Branding stored in Cloudflare KV
+- **Branding API Endpoints**: `GET /api/branding` and `PUT /api/branding`
+
+### Changed
+- Cloud dashboard is now fully responsive for mobile devices
+- Improved sidebar with hamburger menu for mobile navigation
+- Settings page reorganized with branding section
+
 ## [1.1.15] - 2026-02-03
 
 ### Added

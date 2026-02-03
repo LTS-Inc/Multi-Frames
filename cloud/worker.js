@@ -1,8 +1,6 @@
 /**
  * Multi-Frames Cloud API - Cloudflare Worker
- *
- * This worker provides the cloud management API for Multi-Frames devices.
- * Deploy to Cloudflare Workers with KV namespace bindings.
+ * Modern, Responsive Dashboard with Branding Customization
  *
  * Required KV Namespaces:
  *   - DEVICES: Device registry and status
@@ -23,7 +21,7 @@ const CORS_HEADERS = {
   'Access-Control-Max-Age': '86400',
 };
 
-// Helper: JSON response
+// Helper functions
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -31,12 +29,10 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// Helper: Error response
 function errorResponse(message, status = 400) {
   return jsonResponse({ error: message }, status);
 }
 
-// Helper: Generate device key
 function generateDeviceKey() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let key = 'mf_';
@@ -46,58 +42,50 @@ function generateDeviceKey() {
   return key;
 }
 
-// Helper: Verify JWT token
 async function verifyToken(token, env) {
   try {
     const [header, payload, signature] = token.split('.');
     const data = JSON.parse(atob(payload));
-
-    // Check expiration
-    if (data.exp && data.exp < Date.now() / 1000) {
-      return null;
-    }
-
-    // Verify domain if set
-    if (env.ALLOWED_DOMAIN && data.hd !== env.ALLOWED_DOMAIN) {
-      return null;
-    }
-
+    if (data.exp && data.exp < Date.now() / 1000) return null;
+    if (env.ALLOWED_DOMAIN && data.hd !== env.ALLOWED_DOMAIN) return null;
     return data;
   } catch (e) {
     return null;
   }
 }
 
-// Helper: Create JWT token
 async function createToken(payload, env) {
   const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const data = btoa(JSON.stringify({
     ...payload,
     iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 86400 * 7 // 7 days
+    exp: Math.floor(Date.now() / 1000) + 86400 * 7
   }));
-  // Simple signature (in production, use proper HMAC)
   const signature = btoa(env.JWT_SECRET + '.' + data);
   return `${header}.${data}.${signature}`;
 }
 
-// Verify device key
 async function verifyDeviceKey(request, env) {
   const deviceKey = request.headers.get('X-Device-Key');
   if (!deviceKey) return null;
-
   const device = await env.DEVICES.get(`key:${deviceKey}`, 'json');
   return device;
 }
 
-// Verify user authentication
 async function verifyAuth(request, env) {
   const auth = request.headers.get('Authorization');
   if (!auth || !auth.startsWith('Bearer ')) return null;
-
-  const token = auth.substring(7);
-  return await verifyToken(token, env);
+  return await verifyToken(auth.substring(7), env);
 }
+
+// Default branding
+const DEFAULT_BRANDING = {
+  companyName: 'Multi-Frames',
+  logoUrl: '',
+  primaryColor: '#3b82f6',
+  accentColor: '#8b5cf6',
+  darkMode: true
+};
 
 export default {
   async fetch(request, env, ctx) {
@@ -105,7 +93,6 @@ export default {
     const path = url.pathname;
     const method = request.method;
 
-    // Handle CORS preflight
     if (method === 'OPTIONS') {
       return new Response(null, { headers: CORS_HEADERS });
     }
@@ -113,12 +100,10 @@ export default {
     try {
       // ============== AUTH ROUTES ==============
 
-      // Google OAuth callback
       if (path === '/auth/google/callback' && method === 'GET') {
         const code = url.searchParams.get('code');
         if (!code) return errorResponse('Missing code', 400);
 
-        // Exchange code for tokens
         const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -134,18 +119,15 @@ export default {
         const tokens = await tokenResponse.json();
         if (tokens.error) return errorResponse(tokens.error_description, 401);
 
-        // Get user info
         const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
           headers: { Authorization: `Bearer ${tokens.access_token}` }
         });
         const user = await userResponse.json();
 
-        // Check domain restriction
         if (env.ALLOWED_DOMAIN && user.hd !== env.ALLOWED_DOMAIN) {
           return errorResponse(`Access restricted to ${env.ALLOWED_DOMAIN} domain`, 403);
         }
 
-        // Create session token
         const sessionToken = await createToken({
           sub: user.id,
           email: user.email,
@@ -154,11 +136,9 @@ export default {
           hd: user.hd
         }, env);
 
-        // Redirect to dashboard with token
         return Response.redirect(`${url.origin}/dashboard?token=${sessionToken}`, 302);
       }
 
-      // Get Google OAuth URL
       if (path === '/auth/google/url' && method === 'GET') {
         const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
         authUrl.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
@@ -166,27 +146,47 @@ export default {
         authUrl.searchParams.set('response_type', 'code');
         authUrl.searchParams.set('scope', 'openid email profile');
         authUrl.searchParams.set('hd', env.ALLOWED_DOMAIN || '*');
-
         return jsonResponse({ url: authUrl.toString() });
       }
 
-      // Verify token
       if (path === '/auth/verify' && method === 'GET') {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Invalid token', 401);
         return jsonResponse({ valid: true, user });
       }
 
+      // ============== BRANDING ROUTES ==============
+
+      if (path === '/api/branding' && method === 'GET') {
+        const branding = await env.CONFIGS.get('branding', 'json') || DEFAULT_BRANDING;
+        return jsonResponse({ branding });
+      }
+
+      if (path === '/api/branding' && method === 'PUT') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const body = await request.json();
+        const branding = {
+          companyName: body.companyName || DEFAULT_BRANDING.companyName,
+          logoUrl: body.logoUrl || '',
+          primaryColor: body.primaryColor || DEFAULT_BRANDING.primaryColor,
+          accentColor: body.accentColor || DEFAULT_BRANDING.accentColor,
+          darkMode: body.darkMode !== false
+        };
+
+        await env.CONFIGS.put('branding', JSON.stringify(branding));
+        return jsonResponse({ success: true, branding });
+      }
+
       // ============== DEVICE ROUTES ==============
 
-      // Register new device
       if (path === '/api/devices/register' && method === 'POST') {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
         const body = await request.json();
         const { name, hostname, ip_address, version } = body;
-
         if (!name) return errorResponse('Device name required', 400);
 
         const deviceId = crypto.randomUUID();
@@ -205,11 +205,9 @@ export default {
           config_version: 0
         };
 
-        // Store device
         await env.DEVICES.put(`device:${deviceId}`, JSON.stringify(device));
         await env.DEVICES.put(`key:${deviceKey}`, JSON.stringify({ id: deviceId }));
 
-        // Add to device list
         const deviceList = await env.DEVICES.get('device_list', 'json') || [];
         deviceList.push(deviceId);
         await env.DEVICES.put('device_list', JSON.stringify(deviceList));
@@ -218,21 +216,18 @@ export default {
           success: true,
           device_id: deviceId,
           device_key: deviceKey,
-          message: 'Device registered. Add this key to your Multi-Frames cloud settings.'
+          message: 'Device registered successfully'
         });
       }
 
-      // Device heartbeat (called by Multi-Frames instances)
       if (path === '/api/devices/heartbeat' && method === 'POST') {
         const deviceAuth = await verifyDeviceKey(request, env);
         if (!deviceAuth) return errorResponse('Invalid device key', 401);
 
         const body = await request.json();
         const device = await env.DEVICES.get(`device:${deviceAuth.id}`, 'json');
-
         if (!device) return errorResponse('Device not found', 404);
 
-        // Update device status
         device.last_seen = new Date().toISOString();
         device.status = 'online';
         device.hostname = body.hostname || device.hostname;
@@ -245,7 +240,6 @@ export default {
 
         await env.DEVICES.put(`device:${deviceAuth.id}`, JSON.stringify(device));
 
-        // Check if config update available
         const cloudConfig = await env.CONFIGS.get(`config:${deviceAuth.id}`, 'json');
         const configUpdateAvailable = cloudConfig && cloudConfig.version > (body.config_version || 0);
 
@@ -256,7 +250,6 @@ export default {
         });
       }
 
-      // List all devices
       if (path === '/api/devices' && method === 'GET') {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
@@ -267,7 +260,6 @@ export default {
         for (const deviceId of deviceList) {
           const device = await env.DEVICES.get(`device:${deviceId}`, 'json');
           if (device) {
-            // Check if device is offline (no heartbeat in 2 minutes)
             const lastSeen = new Date(device.last_seen);
             if (Date.now() - lastSeen.getTime() > 120000) {
               device.status = 'offline';
@@ -279,31 +271,24 @@ export default {
         return jsonResponse({ devices });
       }
 
-      // Get single device
       if (path.match(/^\/api\/devices\/[\w-]+$/) && method === 'GET') {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
         const deviceId = path.split('/').pop();
         const device = await env.DEVICES.get(`device:${deviceId}`, 'json');
-
         if (!device) return errorResponse('Device not found', 404);
         return jsonResponse({ device });
       }
 
-      // Delete device
       if (path.match(/^\/api\/devices\/[\w-]+$/) && method === 'DELETE') {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
         const deviceId = path.split('/').pop();
-
-        // Remove from device list
         const deviceList = await env.DEVICES.get('device_list', 'json') || [];
         const newList = deviceList.filter(id => id !== deviceId);
         await env.DEVICES.put('device_list', JSON.stringify(newList));
-
-        // Delete device data
         await env.DEVICES.delete(`device:${deviceId}`);
         await env.CONFIGS.delete(`config:${deviceId}`);
 
@@ -312,7 +297,6 @@ export default {
 
       // ============== CONFIG ROUTES ==============
 
-      // Get device config (for devices)
       if (path === '/api/config/pull' && method === 'GET') {
         const deviceAuth = await verifyDeviceKey(request, env);
         if (!deviceAuth) return errorResponse('Invalid device key', 401);
@@ -321,7 +305,6 @@ export default {
         return jsonResponse({ config: config?.data || null, version: config?.version || 0 });
       }
 
-      // Push config to device (from dashboard)
       if (path.match(/^\/api\/config\/[\w-]+$/) && method === 'PUT') {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
@@ -342,24 +325,20 @@ export default {
         return jsonResponse({ success: true, version: newVersion });
       }
 
-      // Get device config (for dashboard)
       if (path.match(/^\/api\/config\/[\w-]+$/) && method === 'GET') {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
         const deviceId = path.split('/').pop();
         const config = await env.CONFIGS.get(`config:${deviceId}`, 'json');
-
         return jsonResponse({ config: config?.data || null, version: config?.version || 0 });
       }
 
-      // Sync config from device to cloud
       if (path === '/api/config/push' && method === 'POST') {
         const deviceAuth = await verifyDeviceKey(request, env);
         if (!deviceAuth) return errorResponse('Invalid device key', 401);
 
         const body = await request.json();
-
         const existingConfig = await env.CONFIGS.get(`config:${deviceAuth.id}`, 'json');
         const newVersion = (existingConfig?.version || 0) + 1;
 
@@ -373,9 +352,6 @@ export default {
         return jsonResponse({ success: true, version: newVersion });
       }
 
-      // ============== BULK OPERATIONS ==============
-
-      // Push config to multiple devices
       if (path === '/api/config/bulk-push' && method === 'POST') {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
@@ -407,14 +383,13 @@ export default {
 
       // ============== DASHBOARD ==============
 
-      // Serve dashboard (basic HTML that loads the React app)
       if (path === '/dashboard' || path === '/' || path === '') {
-        return new Response(DASHBOARD_HTML, {
+        const branding = await env.CONFIGS.get('branding', 'json') || DEFAULT_BRANDING;
+        return new Response(getDashboardHTML(branding), {
           headers: { 'Content-Type': 'text/html' }
         });
       }
 
-      // 404 for unknown routes
       return errorResponse('Not found', 404);
 
     } catch (error) {
@@ -424,224 +399,822 @@ export default {
   }
 };
 
-// Dashboard HTML (embedded for simplicity)
-const DASHBOARD_HTML = `<!DOCTYPE html>
+function getDashboardHTML(branding) {
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Multi-Frames Cloud</title>
+  <title>${branding.companyName} - Cloud Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+
     :root {
-      --bg-primary: #0a0a0a;
-      --bg-secondary: #141414;
-      --bg-tertiary: #1a1a1a;
-      --text-primary: #ffffff;
-      --text-secondary: #888888;
-      --accent: #3b82f6;
+      --primary: ${branding.primaryColor};
+      --primary-hover: ${branding.primaryColor}dd;
+      --accent: ${branding.accentColor};
+      --bg-primary: ${branding.darkMode ? '#0f0f0f' : '#ffffff'};
+      --bg-secondary: ${branding.darkMode ? '#1a1a1a' : '#f5f5f5'};
+      --bg-tertiary: ${branding.darkMode ? '#252525' : '#e5e5e5'};
+      --bg-card: ${branding.darkMode ? '#1a1a1a' : '#ffffff'};
+      --text-primary: ${branding.darkMode ? '#ffffff' : '#111111'};
+      --text-secondary: ${branding.darkMode ? '#a0a0a0' : '#666666'};
+      --text-muted: ${branding.darkMode ? '#666666' : '#999999'};
+      --border: ${branding.darkMode ? '#2a2a2a' : '#e0e0e0'};
       --success: #22c55e;
       --warning: #f59e0b;
       --error: #ef4444;
-      --border: #2a2a2a;
+      --shadow: ${branding.darkMode ? '0 4px 24px rgba(0,0,0,0.4)' : '0 4px 24px rgba(0,0,0,0.1)'};
+      --shadow-sm: ${branding.darkMode ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)'};
     }
+
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       background: var(--bg-primary);
       color: var(--text-primary);
       min-height: 100vh;
+      line-height: 1.5;
     }
-    .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 2rem;
-      padding-bottom: 1rem;
-      border-bottom: 1px solid var(--border);
-    }
-    .header h1 { font-size: 1.5rem; display: flex; align-items: center; gap: 0.5rem; }
-    .user-info { display: flex; align-items: center; gap: 1rem; }
-    .user-info img { width: 32px; height: 32px; border-radius: 50%; }
-    .btn {
-      padding: 0.5rem 1rem;
-      border: none;
-      border-radius: 0.5rem;
-      cursor: pointer;
-      font-size: 0.9rem;
-      transition: all 0.2s;
-    }
-    .btn-primary { background: var(--accent); color: white; }
-    .btn-primary:hover { background: #2563eb; }
-    .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); }
-    .btn-danger { background: var(--error); color: white; }
-    .login-container {
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    /* Layout */
+    .app { display: flex; min-height: 100vh; }
+
+    .sidebar {
+      width: 280px;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
+      position: fixed;
+      height: 100vh;
+      z-index: 100;
+      transition: transform 0.3s ease;
+    }
+
+    .sidebar-header {
+      padding: 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .sidebar-logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      object-fit: cover;
+    }
+
+    .sidebar-logo-placeholder {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      display: flex;
       align-items: center;
       justify-content: center;
-      min-height: 80vh;
-      gap: 1rem;
+      font-size: 1.25rem;
+      color: white;
     }
-    .login-container h2 { font-size: 2rem; margin-bottom: 1rem; }
-    .google-btn {
+
+    .sidebar-title {
+      font-weight: 600;
+      font-size: 1.1rem;
+    }
+
+    .sidebar-nav {
+      flex: 1;
+      padding: 1rem 0;
+      overflow-y: auto;
+    }
+
+    .nav-item {
       display: flex;
       align-items: center;
       gap: 0.75rem;
       padding: 0.75rem 1.5rem;
-      background: white;
-      color: #333;
-      border-radius: 0.5rem;
-      font-size: 1rem;
+      color: var(--text-secondary);
       cursor: pointer;
-      border: none;
+      transition: all 0.2s;
+      border-left: 3px solid transparent;
     }
+
+    .nav-item:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      background: var(--primary)15;
+      color: var(--primary);
+      border-left-color: var(--primary);
+    }
+
+    .nav-item-icon { font-size: 1.25rem; }
+
+    .sidebar-footer {
+      padding: 1rem 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .user-card {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.75rem;
+      background: var(--bg-tertiary);
+      border-radius: 12px;
+    }
+
+    .user-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+    }
+
+    .user-info { flex: 1; min-width: 0; }
+    .user-name { font-weight: 500; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .user-email { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .main-content {
+      flex: 1;
+      margin-left: 280px;
+      padding: 2rem;
+      max-width: 1400px;
+    }
+
+    /* Mobile Sidebar */
+    .mobile-header {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 60px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1rem;
+      align-items: center;
+      gap: 1rem;
+      z-index: 99;
+    }
+
+    .menu-btn {
+      background: none;
+      border: none;
+      color: var(--text-primary);
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0.5rem;
+    }
+
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 99;
+    }
+
+    @media (max-width: 768px) {
+      .sidebar {
+        transform: translateX(-100%);
+      }
+      .sidebar.open {
+        transform: translateX(0);
+      }
+      .sidebar-overlay.open {
+        display: block;
+      }
+      .mobile-header {
+        display: flex;
+      }
+      .main-content {
+        margin-left: 0;
+        padding: 80px 1rem 1rem;
+      }
+    }
+
+    /* Page Header */
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .page-title {
+      font-size: 1.75rem;
+      font-weight: 700;
+    }
+
+    .page-subtitle {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      margin-top: 0.25rem;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.625rem 1.25rem;
+      border: none;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      color: white;
+      box-shadow: 0 4px 12px var(--primary)40;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px var(--primary)50;
+    }
+
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: var(--border);
+    }
+
+    .btn-danger {
+      background: var(--error);
+      color: white;
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-secondary);
+    }
+
+    .btn-ghost:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    .btn-sm {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+    }
+
+    .btn-icon {
+      padding: 0.5rem;
+      border-radius: 8px;
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.25rem;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .stat-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .stat-value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .stat-label {
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      margin-top: 0.25rem;
+    }
+
+    /* Device Grid */
     .devices-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-      gap: 1.5rem;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 1.25rem;
     }
+
     .device-card {
-      background: var(--bg-secondary);
+      background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 0.75rem;
-      padding: 1.25rem;
-      transition: all 0.2s;
+      border-radius: 16px;
+      padding: 1.5rem;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.3s;
     }
-    .device-card:hover { border-color: var(--accent); }
+
+    .device-card:hover {
+      border-color: var(--primary);
+      box-shadow: var(--shadow);
+      transform: translateY(-2px);
+    }
+
     .device-header {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
       margin-bottom: 1rem;
     }
-    .device-name { font-weight: 600; font-size: 1.1rem; }
+
+    .device-name {
+      font-weight: 600;
+      font-size: 1.1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
     .device-status {
-      padding: 0.25rem 0.5rem;
-      border-radius: 1rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.25rem 0.625rem;
+      border-radius: 20px;
       font-size: 0.75rem;
       font-weight: 500;
     }
-    .status-online { background: rgba(34, 197, 94, 0.2); color: var(--success); }
-    .status-offline { background: rgba(239, 68, 68, 0.2); color: var(--error); }
-    .device-info { color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1rem; }
-    .device-info div { margin-bottom: 0.25rem; }
+
+    .status-online {
+      background: var(--success)20;
+      color: var(--success);
+    }
+
+    .status-offline {
+      background: var(--error)20;
+      color: var(--error);
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .device-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .device-info-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .device-info-row span { color: var(--text-primary); }
+
     .device-stats {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 0.5rem;
+      gap: 0.75rem;
       padding-top: 1rem;
       border-top: 1px solid var(--border);
+      margin-bottom: 1rem;
     }
-    .stat { text-align: center; }
-    .stat-value { font-weight: 600; font-size: 1rem; }
-    .stat-label { font-size: 0.7rem; color: var(--text-secondary); }
+
+    .device-stat {
+      text-align: center;
+    }
+
+    .device-stat-value {
+      font-weight: 600;
+      font-size: 1rem;
+    }
+
+    .device-stat-label {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
     .device-actions {
       display: flex;
       gap: 0.5rem;
-      margin-top: 1rem;
-      padding-top: 1rem;
-      border-top: 1px solid var(--border);
     }
-    .device-actions .btn { flex: 1; font-size: 0.8rem; padding: 0.4rem; }
+
+    .device-actions .btn {
+      flex: 1;
+      justify-content: center;
+    }
+
+    /* Empty State */
+    .empty-state {
+      text-align: center;
+      padding: 4rem 2rem;
+      background: var(--bg-card);
+      border: 2px dashed var(--border);
+      border-radius: 16px;
+    }
+
+    .empty-state-icon {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+      opacity: 0.5;
+    }
+
+    .empty-state h3 {
+      font-size: 1.25rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .empty-state p {
+      color: var(--text-secondary);
+      margin-bottom: 1.5rem;
+    }
+
+    /* Modal */
     .modal-overlay {
       position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0,0,0,0.8);
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px);
       display: flex;
       align-items: center;
       justify-content: center;
       z-index: 1000;
-    }
-    .modal {
-      background: var(--bg-secondary);
-      border: 1px solid var(--border);
-      border-radius: 0.75rem;
-      padding: 1.5rem;
-      width: 90%;
-      max-width: 500px;
-      max-height: 80vh;
-      overflow-y: auto;
-    }
-    .modal h3 { margin-bottom: 1rem; }
-    .form-group { margin-bottom: 1rem; }
-    .form-group label { display: block; margin-bottom: 0.5rem; color: var(--text-secondary); font-size: 0.9rem; }
-    .form-group input, .form-group textarea {
-      width: 100%;
-      padding: 0.75rem;
-      background: var(--bg-tertiary);
-      border: 1px solid var(--border);
-      border-radius: 0.5rem;
-      color: var(--text-primary);
-      font-size: 0.9rem;
-    }
-    .form-group textarea { min-height: 200px; font-family: monospace; }
-    .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.5rem; }
-    .copy-box {
-      background: var(--bg-tertiary);
       padding: 1rem;
-      border-radius: 0.5rem;
-      font-family: monospace;
-      font-size: 0.85rem;
-      word-break: break-all;
-      margin: 1rem 0;
     }
-    .empty-state {
-      text-align: center;
-      padding: 4rem 2rem;
+
+    .modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      width: 100%;
+      max-width: 500px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: var(--shadow);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 0.25rem;
+      line-height: 1;
+    }
+
+    .modal-close:hover { color: var(--text-primary); }
+
+    .modal-body {
+      padding: 1.5rem;
+    }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      padding: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Forms */
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 500;
+      margin-bottom: 0.5rem;
       color: var(--text-secondary);
     }
-    .empty-state h3 { color: var(--text-primary); margin-bottom: 0.5rem; }
-    .refresh-btn { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1.2rem; }
-    .refresh-btn:hover { color: var(--text-primary); }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spinning { animation: spin 1s linear infinite; }
+
+    .form-input, .form-textarea, .form-select {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-primary);
+      font-size: 0.9rem;
+      font-family: inherit;
+      transition: all 0.2s;
+    }
+
+    .form-input:focus, .form-textarea:focus, .form-select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary)20;
+    }
+
+    .form-textarea {
+      min-height: 200px;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+      font-size: 0.85rem;
+      resize: vertical;
+    }
+
+    .form-hint {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.375rem;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    @media (max-width: 480px) {
+      .form-row { grid-template-columns: 1fr; }
+    }
+
+    /* Color Picker */
+    .color-input-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .color-preview {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      border: 2px solid var(--border);
+      cursor: pointer;
+    }
+
+    .color-input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    /* Copy Box */
+    .copy-box {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+      font-size: 0.85rem;
+      word-break: break-all;
+      position: relative;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+    }
+
+    /* Success Badge */
+    .success-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      background: var(--success)15;
+      border: 1px solid var(--success)30;
+      border-radius: 10px;
+      color: var(--success);
+      font-weight: 500;
+      margin-bottom: 1rem;
+    }
+
+    /* Login Page */
+    .login-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+      text-align: center;
+    }
+
+    .login-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 3rem 2.5rem;
+      max-width: 400px;
+      width: 100%;
+      box-shadow: var(--shadow);
+    }
+
+    .login-logo {
+      width: 80px;
+      height: 80px;
+      border-radius: 20px;
+      margin: 0 auto 1.5rem;
+      object-fit: cover;
+    }
+
+    .login-logo-placeholder {
+      width: 80px;
+      height: 80px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.5rem;
+      color: white;
+      margin: 0 auto 1.5rem;
+    }
+
+    .login-title {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .login-subtitle {
+      color: var(--text-secondary);
+      margin-bottom: 2rem;
+    }
+
+    .google-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      width: 100%;
+      padding: 0.875rem 1.5rem;
+      background: white;
+      color: #333;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+
+    .google-btn:hover {
+      background: #f8f8f8;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    /* Settings Page */
+    .settings-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .settings-section-title {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    /* Loading */
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      padding: 1rem 1.5rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      z-index: 1001;
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from { transform: translateY(100%); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .toast-success { border-left: 4px solid var(--success); }
+    .toast-error { border-left: 4px solid var(--error); }
   </style>
 </head>
 <body>
   <div id="app"></div>
   <script>
-    // Multi-Frames Cloud Dashboard
-    const API_BASE = window.location.origin;
-    let authToken = null;
-    let currentUser = null;
-    let devices = [];
-    let refreshInterval = null;
+    // State
+    const API = window.location.origin;
+    let state = {
+      token: null,
+      user: null,
+      devices: [],
+      branding: ${JSON.stringify(branding)},
+      currentPage: 'devices',
+      modal: null,
+      sidebarOpen: false
+    };
 
-    // Initialize
+    // Init
     async function init() {
-      // Check for token in URL or localStorage
       const urlParams = new URLSearchParams(window.location.search);
       const urlToken = urlParams.get('token');
 
       if (urlToken) {
-        authToken = urlToken;
+        state.token = urlToken;
         localStorage.setItem('mf_token', urlToken);
         window.history.replaceState({}, '', '/dashboard');
       } else {
-        authToken = localStorage.getItem('mf_token');
+        state.token = localStorage.getItem('mf_token');
       }
 
-      if (authToken) {
+      if (state.token) {
         const verified = await verifyToken();
         if (verified) {
           await loadDevices();
-          startAutoRefresh();
+          setInterval(loadDevices, 30000);
         }
       }
 
       render();
     }
 
-    // API calls
+    // API
     async function api(path, options = {}) {
       const headers = { 'Content-Type': 'application/json', ...options.headers };
-      if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
-
-      const response = await fetch(API_BASE + path, { ...options, headers });
+      if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
+      const response = await fetch(API + path, { ...options, headers });
       return response.json();
     }
 
@@ -649,75 +1222,90 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       try {
         const result = await api('/auth/verify');
         if (result.valid) {
-          currentUser = result.user;
+          state.user = result.user;
           return true;
         }
       } catch (e) {}
-      authToken = null;
+      state.token = null;
       localStorage.removeItem('mf_token');
       return false;
     }
 
     async function loadDevices() {
       const result = await api('/api/devices');
-      devices = result.devices || [];
+      state.devices = result.devices || [];
       render();
     }
 
-    function startAutoRefresh() {
-      if (refreshInterval) clearInterval(refreshInterval);
-      refreshInterval = setInterval(loadDevices, 30000);
+    async function loadBranding() {
+      const result = await api('/api/branding');
+      state.branding = result.branding;
+      render();
     }
 
+    // Actions
     async function login() {
       const result = await api('/auth/google/url');
       window.location.href = result.url;
     }
 
     function logout() {
-      authToken = null;
-      currentUser = null;
+      state.token = null;
+      state.user = null;
       localStorage.removeItem('mf_token');
-      if (refreshInterval) clearInterval(refreshInterval);
       render();
     }
 
-    // Modal state
-    let modalState = { show: false, type: null, data: null };
-
     function showModal(type, data = null) {
-      modalState = { show: true, type, data };
+      state.modal = { type, data };
       render();
     }
 
     function hideModal() {
-      modalState = { show: false, type: null, data: null };
+      state.modal = null;
       render();
     }
 
-    // Device actions
+    function toggleSidebar() {
+      state.sidebarOpen = !state.sidebarOpen;
+      render();
+    }
+
+    function setPage(page) {
+      state.currentPage = page;
+      state.sidebarOpen = false;
+      render();
+    }
+
+    function showToast(message, type = 'success') {
+      const toast = document.createElement('div');
+      toast.className = 'toast toast-' + type;
+      toast.innerHTML = (type === 'success' ? '✓' : '✕') + ' ' + message;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    // Device Actions
     async function registerDevice(e) {
       e.preventDefault();
       const form = e.target;
-      const name = form.name.value;
-
       const result = await api('/api/devices/register', {
         method: 'POST',
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name: form.name.value })
       });
 
       if (result.success) {
         showModal('deviceKey', result);
         await loadDevices();
       } else {
-        alert('Error: ' + result.error);
+        showToast(result.error, 'error');
       }
     }
 
     async function deleteDevice(deviceId) {
-      if (!confirm('Are you sure you want to remove this device?')) return;
-
+      if (!confirm('Remove this device?')) return;
       await api('/api/devices/' + deviceId, { method: 'DELETE' });
+      showToast('Device removed');
       await loadDevices();
     }
 
@@ -727,72 +1315,165 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     }
 
     async function pushConfig(deviceId, config) {
-      const result = await api('/api/config/' + deviceId, {
+      try {
+        const parsed = JSON.parse(config);
+        const result = await api('/api/config/' + deviceId, {
+          method: 'PUT',
+          body: JSON.stringify({ config: parsed })
+        });
+        if (result.success) {
+          showToast('Config pushed (v' + result.version + ')');
+          hideModal();
+        }
+      } catch (e) {
+        showToast('Invalid JSON', 'error');
+      }
+    }
+
+    async function saveBranding(e) {
+      e.preventDefault();
+      const form = e.target;
+      const result = await api('/api/branding', {
         method: 'PUT',
-        body: JSON.stringify({ config: JSON.parse(config) })
+        body: JSON.stringify({
+          companyName: form.companyName.value,
+          logoUrl: form.logoUrl.value,
+          primaryColor: form.primaryColor.value,
+          accentColor: form.accentColor.value,
+          darkMode: form.darkMode.checked
+        })
       });
 
       if (result.success) {
-        alert('Config pushed! Version: ' + result.version);
-        hideModal();
-      } else {
-        alert('Error: ' + result.error);
+        state.branding = result.branding;
+        showToast('Branding saved! Refresh to see changes.');
       }
     }
 
     // Render
     function render() {
       const app = document.getElementById('app');
-
-      if (!authToken || !currentUser) {
+      if (!state.token || !state.user) {
         app.innerHTML = renderLogin();
       } else {
-        app.innerHTML = renderDashboard();
+        app.innerHTML = renderApp();
       }
     }
 
     function renderLogin() {
+      const b = state.branding;
       return \`
         <div class="login-container">
-          <h2>Multi-Frames Cloud</h2>
-          <p style="color: var(--text-secondary); margin-bottom: 2rem;">Manage your Multi-Frames devices from anywhere</p>
-          <button class="google-btn" onclick="login()">
-            <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-            Sign in with Google
-          </button>
+          <div class="login-card">
+            \${b.logoUrl
+              ? '<img src="' + b.logoUrl + '" class="login-logo" alt="Logo">'
+              : '<div class="login-logo-placeholder">📺</div>'
+            }
+            <h1 class="login-title">\${b.companyName}</h1>
+            <p class="login-subtitle">Cloud Device Management</p>
+            <button class="google-btn" onclick="login()">
+              <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+              Sign in with Google
+            </button>
+          </div>
         </div>
       \`;
     }
 
-    function renderDashboard() {
+    function renderApp() {
+      const b = state.branding;
       return \`
-        <div class="container">
-          <div class="header">
-            <h1>📺 Multi-Frames Cloud</h1>
-            <div class="user-info">
-              <button class="refresh-btn" onclick="loadDevices(); this.classList.add('spinning'); setTimeout(() => this.classList.remove('spinning'), 1000);">🔄</button>
-              <img src="\${currentUser.picture}" alt="Profile">
-              <span>\${currentUser.name}</span>
-              <button class="btn btn-secondary" onclick="logout()">Logout</button>
-            </div>
-          </div>
+        <div class="app">
+          <div class="sidebar-overlay \${state.sidebarOpen ? 'open' : ''}" onclick="toggleSidebar()"></div>
 
-          <div style="margin-bottom: 1.5rem;">
+          <aside class="sidebar \${state.sidebarOpen ? 'open' : ''}">
+            <div class="sidebar-header">
+              \${b.logoUrl
+                ? '<img src="' + b.logoUrl + '" class="sidebar-logo" alt="Logo">'
+                : '<div class="sidebar-logo-placeholder">📺</div>'
+              }
+              <span class="sidebar-title">\${b.companyName}</span>
+            </div>
+            <nav class="sidebar-nav">
+              <div class="nav-item \${state.currentPage === 'devices' ? 'active' : ''}" onclick="setPage('devices')">
+                <span class="nav-item-icon">📱</span> Devices
+              </div>
+              <div class="nav-item \${state.currentPage === 'settings' ? 'active' : ''}" onclick="setPage('settings')">
+                <span class="nav-item-icon">⚙️</span> Settings
+              </div>
+            </nav>
+            <div class="sidebar-footer">
+              <div class="user-card">
+                <img src="\${state.user.picture}" class="user-avatar" alt="Avatar">
+                <div class="user-info">
+                  <div class="user-name">\${state.user.name}</div>
+                  <div class="user-email">\${state.user.email}</div>
+                </div>
+                <button class="btn btn-ghost btn-icon" onclick="logout()" title="Logout">🚪</button>
+              </div>
+            </div>
+          </aside>
+
+          <header class="mobile-header">
+            <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+            <span style="font-weight:600;">\${b.companyName}</span>
+          </header>
+
+          <main class="main-content">
+            \${state.currentPage === 'devices' ? renderDevicesPage() : ''}
+            \${state.currentPage === 'settings' ? renderSettingsPage() : ''}
+          </main>
+
+          \${state.modal ? renderModal() : ''}
+        </div>
+      \`;
+    }
+
+    function renderDevicesPage() {
+      const online = state.devices.filter(d => d.status === 'online').length;
+      const offline = state.devices.length - online;
+
+      return \`
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Devices</h1>
+            <p class="page-subtitle">Manage your Multi-Frames installations</p>
+          </div>
+          <button class="btn btn-primary" onclick="showModal('addDevice')">
+            <span>+</span> Add Device
+          </button>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--primary)20;color:var(--primary);">📱</div>
+            <div class="stat-value">\${state.devices.length}</div>
+            <div class="stat-label">Total Devices</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--success)20;color:var(--success);">✓</div>
+            <div class="stat-value">\${online}</div>
+            <div class="stat-label">Online</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--error)20;color:var(--error);">○</div>
+            <div class="stat-value">\${offline}</div>
+            <div class="stat-label">Offline</div>
+          </div>
+        </div>
+
+        \${state.devices.length === 0 ? \`
+          <div class="empty-state">
+            <div class="empty-state-icon">📱</div>
+            <h3>No devices yet</h3>
+            <p>Register your first Multi-Frames device to get started</p>
             <button class="btn btn-primary" onclick="showModal('addDevice')">+ Add Device</button>
           </div>
-
-          \${devices.length === 0 ? \`
-            <div class="empty-state">
-              <h3>No devices registered</h3>
-              <p>Click "Add Device" to register your first Multi-Frames instance</p>
-            </div>
-          \` : \`
-            <div class="devices-grid">
-              \${devices.map(renderDeviceCard).join('')}
-            </div>
-          \`}
-        </div>
-        \${modalState.show ? renderModal() : ''}
+        \` : \`
+          <div class="devices-grid">
+            \${state.devices.map(renderDeviceCard).join('')}
+          </div>
+        \`}
       \`;
     }
 
@@ -803,85 +1484,171 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       return \`
         <div class="device-card">
           <div class="device-header">
-            <div class="device-name">\${device.name}</div>
+            <div class="device-name">
+              <span>\${device.name}</span>
+            </div>
             <div class="device-status \${isOnline ? 'status-online' : 'status-offline'}">
-              \${isOnline ? '● Online' : '○ Offline'}
+              <span class="status-dot"></span>
+              \${isOnline ? 'Online' : 'Offline'}
             </div>
           </div>
+
           <div class="device-info">
-            <div>📍 \${device.hostname} (\${device.ip_address})</div>
-            <div>📦 Version \${device.version}</div>
-            <div>🕐 Last seen: \${lastSeen}</div>
+            <div class="device-info-row">🖥️ <span>\${device.hostname}</span></div>
+            <div class="device-info-row">🌐 <span>\${device.ip_address}</span></div>
+            <div class="device-info-row">📦 <span>v\${device.version}</span></div>
+            <div class="device-info-row">🕐 <span>\${lastSeen}</span></div>
           </div>
+
           \${isOnline ? \`
             <div class="device-stats">
-              <div class="stat">
-                <div class="stat-value">\${device.uptime || '-'}</div>
-                <div class="stat-label">Uptime</div>
+              <div class="device-stat">
+                <div class="device-stat-value">\${device.uptime || '-'}</div>
+                <div class="device-stat-label">Uptime</div>
               </div>
-              <div class="stat">
-                <div class="stat-value">\${device.memory_used || '-'}</div>
-                <div class="stat-label">Memory</div>
+              <div class="device-stat">
+                <div class="device-stat-value">\${device.memory_used || '-'}</div>
+                <div class="device-stat-label">Memory</div>
               </div>
-              <div class="stat">
-                <div class="stat-value">\${device.cpu_temp ? device.cpu_temp + '°C' : '-'}</div>
-                <div class="stat-label">Temp</div>
+              <div class="device-stat">
+                <div class="device-stat-value">\${device.cpu_temp ? device.cpu_temp + '°' : '-'}</div>
+                <div class="device-stat-label">Temp</div>
               </div>
             </div>
           \` : ''}
+
           <div class="device-actions">
-            <button class="btn btn-secondary" onclick="viewConfig('\${device.id}')">View Config</button>
-            <button class="btn btn-danger" onclick="deleteDevice('\${device.id}')">Remove</button>
+            <button class="btn btn-secondary btn-sm" onclick="viewConfig('\${device.id}')">⚙️ Config</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteDevice('\${device.id}')">🗑️ Remove</button>
           </div>
         </div>
       \`;
     }
 
+    function renderSettingsPage() {
+      const b = state.branding;
+      return \`
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Settings</h1>
+            <p class="page-subtitle">Customize your dashboard</p>
+          </div>
+        </div>
+
+        <form onsubmit="saveBranding(event)">
+          <div class="settings-section">
+            <h3 class="settings-section-title">🎨 Branding</h3>
+
+            <div class="form-group">
+              <label class="form-label">Company Name</label>
+              <input type="text" name="companyName" class="form-input" value="\${b.companyName}" placeholder="Your Company">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Logo URL</label>
+              <input type="url" name="logoUrl" class="form-input" value="\${b.logoUrl || ''}" placeholder="https://example.com/logo.png">
+              <p class="form-hint">Enter a URL to your company logo (recommended: 80x80px)</p>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Primary Color</label>
+                <div class="color-input-wrapper">
+                  <label class="color-preview" style="background:\${b.primaryColor}" onclick="this.querySelector('input').click()">
+                    <input type="color" name="primaryColor" class="color-input" value="\${b.primaryColor}" onchange="this.parentElement.style.background=this.value">
+                  </label>
+                  <span>\${b.primaryColor}</span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Accent Color</label>
+                <div class="color-input-wrapper">
+                  <label class="color-preview" style="background:\${b.accentColor}" onclick="this.querySelector('input').click()">
+                    <input type="color" name="accentColor" class="color-input" value="\${b.accentColor}" onchange="this.parentElement.style.background=this.value">
+                  </label>
+                  <span>\${b.accentColor}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label style="display:flex;align-items:center;gap:0.75rem;cursor:pointer;">
+                <input type="checkbox" name="darkMode" \${b.darkMode ? 'checked' : ''} style="width:18px;height:18px;">
+                <span>Dark Mode</span>
+              </label>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">💾 Save Changes</button>
+        </form>
+      \`;
+    }
+
     function renderModal() {
+      const m = state.modal;
       let content = '';
 
-      if (modalState.type === 'addDevice') {
+      if (m.type === 'addDevice') {
         content = \`
-          <h3>Register New Device</h3>
+          <div class="modal-header">
+            <h2 class="modal-title">Add Device</h2>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
+          </div>
           <form onsubmit="registerDevice(event)">
-            <div class="form-group">
-              <label>Device Name</label>
-              <input type="text" name="name" placeholder="e.g., Kitchen Display" required>
+            <div class="modal-body">
+              <div class="form-group">
+                <label class="form-label">Device Name</label>
+                <input type="text" name="name" class="form-input" placeholder="e.g., Kitchen Display" required autofocus>
+                <p class="form-hint">A friendly name to identify this device</p>
+              </div>
             </div>
-            <div class="modal-actions">
+            <div class="modal-footer">
               <button type="button" class="btn btn-secondary" onclick="hideModal()">Cancel</button>
-              <button type="submit" class="btn btn-primary">Register</button>
+              <button type="submit" class="btn btn-primary">Register Device</button>
             </div>
           </form>
         \`;
-      } else if (modalState.type === 'deviceKey') {
+      } else if (m.type === 'deviceKey') {
         content = \`
-          <h3>✅ Device Registered!</h3>
-          <p style="color: var(--text-secondary); margin-bottom: 1rem;">Add this key to your Multi-Frames cloud settings:</p>
-          <div class="copy-box">\${modalState.data.device_key}</div>
-          <p style="color: var(--warning); font-size: 0.85rem;">⚠️ Save this key now - it won't be shown again!</p>
-          <div class="modal-actions">
-            <button class="btn btn-primary" onclick="navigator.clipboard.writeText('\${modalState.data.device_key}'); alert('Copied!')">Copy Key</button>
-            <button class="btn btn-secondary" onclick="hideModal()">Done</button>
+          <div class="modal-header">
+            <h2 class="modal-title">Device Registered!</h2>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="success-badge">✓ Device registered successfully</div>
+            <p style="margin-bottom:1rem;color:var(--text-secondary);">Add this key to your Multi-Frames config:</p>
+            <div class="copy-box">
+              \${m.data.device_key}
+              <button class="btn btn-secondary btn-sm copy-btn" onclick="navigator.clipboard.writeText('\${m.data.device_key}');showToast('Copied!')">📋 Copy</button>
+            </div>
+            <p style="color:var(--warning);font-size:0.85rem;margin-top:1rem;">⚠️ Save this key now - it won't be shown again!</p>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary" onclick="hideModal()">Done</button>
           </div>
         \`;
-      } else if (modalState.type === 'viewConfig') {
-        const configStr = modalState.data.config ? JSON.stringify(modalState.data.config, null, 2) : '// No config synced yet';
+      } else if (m.type === 'viewConfig') {
+        const configStr = m.data.config ? JSON.stringify(m.data.config, null, 2) : '// No config synced yet';
         content = \`
-          <h3>Device Configuration</h3>
-          <p style="color: var(--text-secondary); margin-bottom: 0.5rem;">Version: \${modalState.data.version}</p>
-          <div class="form-group">
-            <textarea id="configEditor">\${configStr}</textarea>
+          <div class="modal-header">
+            <h2 class="modal-title">Device Configuration</h2>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
           </div>
-          <div class="modal-actions">
-            <button class="btn btn-secondary" onclick="hideModal()">Close</button>
-            <button class="btn btn-primary" onclick="pushConfig('\${modalState.data.deviceId}', document.getElementById('configEditor').value)">Push to Device</button>
+          <div class="modal-body">
+            <p style="color:var(--text-secondary);margin-bottom:1rem;">Version: \${m.data.version}</p>
+            <div class="form-group">
+              <textarea id="configEditor" class="form-textarea">\${configStr}</textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="hideModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="pushConfig('\${m.data.deviceId}', document.getElementById('configEditor').value)">Push to Device</button>
           </div>
         \`;
       }
 
       return \`
-        <div class="modal-overlay" onclick="if(event.target === this) hideModal()">
+        <div class="modal-overlay" onclick="if(event.target===this)hideModal()">
           <div class="modal">\${content}</div>
         </div>
       \`;
@@ -892,3 +1659,4 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
+}

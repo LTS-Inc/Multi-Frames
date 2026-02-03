@@ -4,11 +4,12 @@ Manage multiple Multi-Frames installations remotely with a centralized cloud das
 
 ## Features
 
-- **Remote Dashboard**: Access all your devices from anywhere
+- **Modern Dashboard**: Responsive design with Inter font and sidebar navigation
 - **Google Workspace Auth**: Secure login with your organization's Google accounts
 - **Config Sync**: Push configuration to 50+ devices simultaneously
 - **Real-time Status**: Monitor device health, uptime, and temperature
-- **Firmware Updates**: Coordinate updates across all devices
+- **Branding Customization**: Company name, logo, colors, dark mode
+- **Mobile Friendly**: Hamburger menu and touch-optimized interface
 
 ## Architecture
 
@@ -160,6 +161,13 @@ id = "your-sessions-kv-id"
 | `/api/config/{id}` | PUT | Push config to device (user auth) |
 | `/api/config/bulk-push` | POST | Push config to multiple devices |
 
+### Branding
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/branding` | GET | Get dashboard branding settings |
+| `/api/branding` | PUT | Update branding (user auth) |
+
 ## Usage
 
 ### Push Config to All Devices
@@ -182,6 +190,26 @@ Devices automatically:
 1. Send heartbeat every 60 seconds
 2. Check for config updates
 3. Pull and apply new configs when available
+
+### Customize Branding
+
+Navigate to **Settings** in the dashboard sidebar to customize:
+
+```json
+{
+  "companyName": "Your Company",
+  "logoUrl": "https://example.com/logo.png",
+  "primaryColor": "#3b82f6",
+  "accentColor": "#8b5cf6",
+  "darkMode": true
+}
+```
+
+- **Company Name**: Displayed in the header and page title
+- **Logo URL**: Your company logo (optional)
+- **Primary Color**: Main UI color (buttons, links)
+- **Accent Color**: Secondary color for gradients
+- **Dark Mode**: Toggle dark/light theme
 
 ## Security
 

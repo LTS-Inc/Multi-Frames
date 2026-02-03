@@ -5,6 +5,26 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.15] - 2026-02-03
+
+### Added
+- **Cloud Remote Management**: Manage 50+ Multi-Frames devices from anywhere
+  - Cloudflare Workers-based serverless backend
+  - Google Workspace authentication for secure access
+  - Real-time device status monitoring (online/offline, uptime, temp)
+  - Full config mirror sync across all devices
+  - Bulk config push to multiple devices
+  - Device registration with secure API keys
+- **Cloud Agent**: Background service in Multi-Frames for cloud connectivity
+  - Automatic heartbeat every 60 seconds
+  - Config pull/push synchronization
+  - Auto-apply config updates from cloud
+- **Cloud Dashboard**: Web-based management interface
+  - View all registered devices
+  - Monitor device health and status
+  - Push configurations remotely
+  - Device registration workflow
+
 ## [1.1.14] - 2026-02-03
 
 ### Changed

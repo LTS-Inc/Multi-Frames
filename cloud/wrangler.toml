@@ -1,0 +1,32 @@
+# Multi-Frames Cloud - Cloudflare Worker Configuration
+# Deploy with: npx wrangler deploy
+
+name = "multi-frames-cloud"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# KV Namespaces - Create these in Cloudflare dashboard first
+# Then add the IDs here
+[[kv_namespaces]]
+binding = "DEVICES"
+id = "YOUR_DEVICES_KV_NAMESPACE_ID"
+
+[[kv_namespaces]]
+binding = "CONFIGS"
+id = "YOUR_CONFIGS_KV_NAMESPACE_ID"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "YOUR_SESSIONS_KV_NAMESPACE_ID"
+
+# Environment Variables - Set these in Cloudflare dashboard or use wrangler secret
+# [vars]
+# GOOGLE_CLIENT_ID = "your-google-client-id"
+# GOOGLE_CLIENT_SECRET = "your-google-client-secret"  # Use wrangler secret put
+# ALLOWED_DOMAIN = "yourcompany.com"
+# JWT_SECRET = "your-jwt-secret"  # Use wrangler secret put
+
+# Custom domain (optional)
+# routes = [
+#   { pattern = "cloud.yourdomain.com/*", zone_name = "yourdomain.com" }
+# ]

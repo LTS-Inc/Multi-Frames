@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.1.14-2026--02--03-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.1.15-2026--02--03-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -239,28 +239,30 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.1.14
+## 🆕 What's New in v1.1.15
 
 <table>
 <tr>
 <td>
 
-### 🔌 Simplified Connectivity
+### ☁️ Cloud Remote Management
 
-- Simple green/red status indicator
-- Green = reachable, Red = not reachable
-- More reliable detection
-- Option to hide status icon per iframe
+- Manage 50+ devices from anywhere
+- Google Workspace authentication
+- Real-time status monitoring
+- Full config sync across devices
+- Cloudflare Workers backend (free tier)
 
 </td>
 <td>
 
-### 🔧 Bug Fixes
+### 📡 Cloud Dashboard
 
-- Fixed user add error ('re' module)
-- Fixed uptime reset on unexpected stops
-- Cleaner, simpler codebase
-- Improved stability
+- View all devices in one place
+- Push configs to multiple devices
+- Device health monitoring
+- Secure device registration
+- Works from any browser
 
 </td>
 </tr>
@@ -522,6 +524,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.1.15** | 2026-02-03 | Cloud remote management, Google Workspace auth, config sync |
 | **1.1.14** | 2026-02-03 | Simplified connectivity test, status icon toggle, bug fixes |
 | **1.1.13** | 2026-01-27 | Fixed false throttle alerts, accurate vcgencmd integration |
 | **1.1.12** | 2026-01-27 | Real-time Pi health widgets (MB/GB), core voltage display, server reset fix |

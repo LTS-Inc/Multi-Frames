@@ -193,7 +193,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.14"
+VERSION = "1.1.15"
 VERSION_DATE = "2026-02-03"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -678,6 +678,232 @@ class UptimeTracker:
 
 # Global uptime tracker instance
 uptime_tracker = UptimeTracker()
+
+# =============================================================================
+# Cloud Agent - Remote Management & Config Sync
+# =============================================================================
+
+class CloudAgent:
+    """Background agent for cloud connectivity, config sync, and remote management."""
+
+    HEARTBEAT_INTERVAL = 60  # seconds
+
+    def __init__(self):
+        self.enabled = False
+        self.cloud_url = None
+        self.device_key = None
+        self.config_version = 0
+        self._thread = None
+        self._stop_event = None
+        self._last_heartbeat = None
+        self._last_error = None
+        self._connected = False
+
+    def initialize(self, config):
+        """Initialize cloud agent from config."""
+        cloud_config = config.get('cloud', {})
+        self.enabled = cloud_config.get('enabled', False)
+        self.cloud_url = cloud_config.get('url', '').rstrip('/')
+        self.device_key = cloud_config.get('device_key', '')
+        self.config_version = cloud_config.get('config_version', 0)
+
+        if self.enabled and self.cloud_url and self.device_key:
+            self.start()
+
+    def start(self):
+        """Start the background sync thread."""
+        if self._thread and self._thread.is_alive():
+            return
+
+        import threading
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        server_logger.info(f"Cloud agent started, connecting to {self.cloud_url}")
+
+    def stop(self):
+        """Stop the background sync thread."""
+        if self._stop_event:
+            self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+        self._connected = False
+
+    def _run(self):
+        """Background thread main loop."""
+        while not self._stop_event.is_set():
+            try:
+                self._send_heartbeat()
+                self._check_config_update()
+            except Exception as e:
+                self._last_error = str(e)
+                self._connected = False
+                server_logger.error(f"Cloud agent error: {e}")
+
+            # Wait for next interval or stop signal
+            self._stop_event.wait(self.HEARTBEAT_INTERVAL)
+
+    def _send_heartbeat(self):
+        """Send heartbeat to cloud server."""
+        if not self.cloud_url or not self.device_key:
+            return
+
+        import urllib.request
+        import json
+        import socket
+
+        # Gather device info
+        pi_info = get_raspberry_pi_info()
+        sys_info = get_system_info()
+
+        heartbeat_data = {
+            'hostname': socket.gethostname(),
+            'ip_address': self._get_local_ip(),
+            'version': VERSION,
+            'config_version': self.config_version,
+            'uptime': sys_info.get('server_uptime_formatted', ''),
+            'memory_used': f"{pi_info.get('memory_used', 0)}/{pi_info.get('memory_total', 0)} MB" if pi_info else '',
+            'cpu_temp': pi_info.get('temperature') if pi_info else None
+        }
+
+        try:
+            req = urllib.request.Request(
+                f"{self.cloud_url}/api/devices/heartbeat",
+                data=json.dumps(heartbeat_data).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'X-Device-Key': self.device_key
+                },
+                method='POST'
+            )
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                self._connected = True
+                self._last_heartbeat = datetime.now()
+                self._last_error = None
+
+                # Check if config update available
+                if result.get('config_update_available'):
+                    self._pull_config()
+
+        except Exception as e:
+            self._connected = False
+            self._last_error = str(e)
+            raise
+
+    def _check_config_update(self):
+        """Check for and apply config updates from cloud."""
+        pass  # Handled in heartbeat response
+
+    def _pull_config(self):
+        """Pull config from cloud and apply it."""
+        if not self.cloud_url or not self.device_key:
+            return
+
+        import urllib.request
+        import json
+
+        try:
+            req = urllib.request.Request(
+                f"{self.cloud_url}/api/config/pull",
+                headers={'X-Device-Key': self.device_key},
+                method='GET'
+            )
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode('utf-8'))
+
+                if result.get('config') and result.get('version', 0) > self.config_version:
+                    # Apply new config
+                    self._apply_config(result['config'], result['version'])
+
+        except Exception as e:
+            server_logger.error(f"Cloud config pull failed: {e}")
+
+    def _apply_config(self, new_config, version):
+        """Apply config received from cloud."""
+        try:
+            config = load_config()
+
+            # Merge cloud config (preserve local cloud settings)
+            cloud_settings = config.get('cloud', {})
+
+            # Update config with cloud data
+            for key, value in new_config.items():
+                if key != 'cloud':  # Don't overwrite cloud settings
+                    config[key] = value
+
+            # Restore cloud settings and update version
+            config['cloud'] = cloud_settings
+            config['cloud']['config_version'] = version
+            self.config_version = version
+
+            save_config(config)
+            server_logger.info(f"Cloud config applied, version {version}")
+
+        except Exception as e:
+            server_logger.error(f"Failed to apply cloud config: {e}")
+
+    def push_config(self, config):
+        """Push current config to cloud."""
+        if not self.enabled or not self.cloud_url or not self.device_key:
+            return False, "Cloud sync not enabled"
+
+        import urllib.request
+        import json
+
+        # Prepare config for upload (exclude sensitive data)
+        upload_config = {k: v for k, v in config.items() if k not in ['cloud']}
+
+        try:
+            req = urllib.request.Request(
+                f"{self.cloud_url}/api/config/push",
+                data=json.dumps({'config': upload_config}).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'X-Device-Key': self.device_key
+                },
+                method='POST'
+            )
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                if result.get('success'):
+                    self.config_version = result.get('version', self.config_version)
+                    config['cloud']['config_version'] = self.config_version
+                    return True, f"Config synced to cloud (version {self.config_version})"
+                return False, result.get('error', 'Unknown error')
+
+        except Exception as e:
+            return False, str(e)
+
+    def _get_local_ip(self):
+        """Get local IP address."""
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return '127.0.0.1'
+
+    def get_status(self):
+        """Get cloud agent status."""
+        return {
+            'enabled': self.enabled,
+            'connected': self._connected,
+            'cloud_url': self.cloud_url,
+            'config_version': self.config_version,
+            'last_heartbeat': self._last_heartbeat.isoformat() if self._last_heartbeat else None,
+            'last_error': self._last_error
+        }
+
+
+# Global cloud agent instance
+cloud_agent = CloudAgent()
 
 def get_system_info():
     """Get system information for debugging."""
@@ -10807,6 +11033,11 @@ def main():
     uptime_tracker.initialize(config)
     save_config(config)
     server_logger.info("Watchdog uptime tracking initialized")
+
+    # Initialize cloud agent for remote management
+    cloud_agent.initialize(config)
+    if cloud_agent.enabled:
+        server_logger.info("Cloud agent initialized")
 
     # Start mDNS if enabled
     if config.get("network", {}).get("mdns", {}).get("enabled", False):

@@ -5,6 +5,22 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.14] - 2026-02-03
+
+### Changed
+- **Simplified iFrame Connectivity Test**: Streamlined the connectivity status indicator
+  - Simple green/red status: green = reachable, red = not reachable
+  - Removed complex X-Frame-Options/CSP header checking (was causing false warnings)
+  - More reliable and predictable connectivity detection
+  - Cleaner, simpler codebase
+
+### Fixed
+- **User Add Error**: Fixed "cannot access local variable 're'" error when adding users
+- **Server Uptime**: Fixed uptime not resetting after unexpected server stops
+
+### Added
+- **Status Icon Setting**: New option to hide/show connectivity status icon per iframe
+
 ## [1.1.13] - 2026-01-27
 
 ### Fixed

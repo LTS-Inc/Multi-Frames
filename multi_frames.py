@@ -193,8 +193,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.13"
-VERSION_DATE = "2026-01-26"
+VERSION = "1.1.14"
+VERSION_DATE = "2026-02-03"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -5196,11 +5196,10 @@ def render_main_page(user, config):
         # Build iframe URL list for connectivity testing
         iframe_test_data = []
         for i, iframe in enumerate(iframes):
-            if not iframe.get("use_embed_code", False):
+            if not iframe.get("use_embed_code", False) and iframe.get("url"):
                 iframe_test_data.append({
                     "index": i,
-                    "url": iframe.get("url", ""),
-                    "name": iframe.get("name", f"Frame {i+1}")
+                    "url": iframe.get("url", "")
                 })
 
         import json as json_module
@@ -5260,83 +5259,50 @@ def render_main_page(user, config):
             }}
         }}
         
-        function setIframeStatus(index, status, reason) {{
+        function setIframeStatus(index, connected, reason) {{
             var dot = document.getElementById('status-' + index);
             if (dot) {{
                 dot.classList.remove('loading', 'connected', 'error', 'warning');
-                if (status === 'connected') {{
+                if (connected) {{
                     dot.classList.add('connected');
                     dot.title = 'Connected';
-                    dot.textContent = '●';
                     hideFallback(index);
-                }} else if (status === 'warning') {{
-                    dot.classList.add('warning');
-                    dot.title = reason || 'May be blocked';
-                    dot.textContent = '●';
-                    // Don't show fallback for warnings - iframe might still work
                 }} else {{
                     dot.classList.add('error');
-                    dot.title = reason || 'Connection error';
-                    dot.textContent = '●';
+                    dot.title = reason || 'Not reachable';
                     showFallback(index);
                 }}
             }}
         }}
 
-        // Test a single iframe URL using server-side connectivity test
-        function testIframeUrl(index, url, name) {{
+        // Test iframe URL using server-side connectivity test
+        function testIframeUrl(index, url) {{
             var dot = document.getElementById('status-' + index);
             if (!dot) return;
 
             fetch(apiBase + '/api/connectivity-test-url', {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ url: url, index: index }})
+                body: JSON.stringify({{ url: url }})
             }})
             .then(function(response) {{ return response.json(); }})
             .then(function(data) {{
                 var result = data.result || {{}};
-                var status = 'connected';
-                var reason = '';
-
-                // Check for X-Frame-Options that would block embedding
-                if (result.x_frame_options) {{
-                    var xfo = result.x_frame_options.toUpperCase();
-                    if (xfo === 'DENY' || xfo === 'SAMEORIGIN') {{
-                        status = 'warning';
-                        reason = 'Blocked by X-Frame-Options: ' + xfo;
-                    }}
-                }}
-
-                // Check for CSP frame-ancestors that would block embedding
-                if (result.csp_frame_ancestors) {{
-                    var csp = result.csp_frame_ancestors.toLowerCase();
-                    if (csp.includes("'none'") || (csp.includes("'self'") && !csp.includes('*'))) {{
-                        status = 'warning';
-                        reason = 'Blocked by Content-Security-Policy';
-                    }}
-                }}
-
-                // Handle error cases
-                if (result.status === 'error') {{
-                    status = 'error';
-                    reason = result.error || 'Connection failed';
-                }}
-
-                setIframeStatus(index, status, reason);
+                // Simple: connected if status is success, error otherwise
+                var connected = (result.status === 'success');
+                setIframeStatus(index, connected, result.error);
             }})
-            .catch(function(err) {{
-                // If server test fails, mark as error
-                setIframeStatus(index, 'error', 'Test failed');
+            .catch(function() {{
+                setIframeStatus(index, false, 'Test failed');
             }});
         }}
 
         // Test all iframe URLs on page load
         function testAllIframes() {{
             iframeTestData.forEach(function(item, i) {{
-                // Stagger tests by 200ms to avoid overwhelming the server
+                // Stagger tests by 200ms
                 setTimeout(function() {{
-                    testIframeUrl(item.index, item.url, item.name);
+                    testIframeUrl(item.index, item.url);
                 }}, i * 200);
             }});
         }}

@@ -5,6 +5,23 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-02-04
+
+### Fixed
+- **Connectivity Test Accuracy**: Fixed false negatives in iframe status indicators
+  - HTTP 4xx/5xx responses now correctly show as "reachable" (server responded)
+  - Only network-level errors (timeout, DNS, connection refused) show as failed
+  - Added warning status for SSL certificate issues
+- **Cloud Agent 403 Error**: Fixed Cloudflare blocking Python requests
+  - Added proper User-Agent header (`Multi-Frames/{VERSION}`) to all cloud API calls
+  - Heartbeat, config pull, and config push endpoints now work correctly
+
+### Changed
+- Connectivity test now uses HEAD requests instead of GET for faster response
+- Reduced connectivity test timeout from 10s to 8s
+- Improved error messages for different network failure types
+- Help page and admin connectivity tests now show "Reachable" for HTTP errors
+
 ## [1.2.1] - 2026-02-04
 
 ### Added

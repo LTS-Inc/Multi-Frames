@@ -4420,10 +4420,14 @@ def render_help_page(user, config):
                 }}
             }}
 
-            // Handle various error cases
-            if (result.status === 'error' || result.status === 'warning') {{
+            // Handle error cases - note: 'success' status includes HTTP 4xx/5xx (server reachable)
+            if (result.status === 'error') {{
                 isSuccess = false;
-                reason = result.error || 'HTTP ' + result.http_status;
+                reason = result.error || 'Not reachable';
+            }} else if (result.status === 'warning') {{
+                // SSL issues - server reachable but with certificate problems
+                isBlocked = true;
+                reason = result.error || 'SSL certificate issue';
             }}
 
             // Update UI
@@ -5490,13 +5494,17 @@ def render_main_page(user, config):
             }}
         }}
         
-        function setIframeStatus(index, connected, reason) {{
+        function setIframeStatus(index, status, reason) {{
             var dot = document.getElementById('status-' + index);
             if (dot) {{
                 dot.classList.remove('loading', 'connected', 'error', 'warning');
-                if (connected) {{
+                if (status === 'connected') {{
                     dot.classList.add('connected');
-                    dot.title = 'Connected';
+                    dot.title = reason || 'Reachable';
+                    hideFallback(index);
+                }} else if (status === 'warning') {{
+                    dot.classList.add('warning');
+                    dot.title = reason || 'SSL issue';
                     hideFallback(index);
                 }} else {{
                     dot.classList.add('error');
@@ -5519,12 +5527,18 @@ def render_main_page(user, config):
             .then(function(response) {{ return response.json(); }})
             .then(function(data) {{
                 var result = data.result || {{}};
-                // Simple: connected if status is success, error otherwise
-                var connected = (result.status === 'success');
-                setIframeStatus(index, connected, result.error);
+                // Reachable: success or warning status
+                if (result.status === 'success') {{
+                    var note = result.note || (result.http_status ? 'HTTP ' + result.http_status : 'Reachable');
+                    setIframeStatus(index, 'connected', note);
+                }} else if (result.status === 'warning') {{
+                    setIframeStatus(index, 'warning', result.error || 'SSL issue');
+                }} else {{
+                    setIframeStatus(index, 'error', result.error || 'Not reachable');
+                }}
             }})
             .catch(function() {{
-                setIframeStatus(index, false, 'Test failed');
+                setIframeStatus(index, 'error', 'Test failed');
             }});
         }}
 
@@ -8737,20 +8751,24 @@ def render_system_section(config):
                         }}
                     }}
 
-                    // Handle various error cases
-                    if (result.status === 'error' || result.status === 'warning') {{
+                    // Handle error cases - 'success' includes HTTP 4xx/5xx (server reachable)
+                    if (result.status === 'error') {{
                         isSuccess = false;
-                        reason = result.error || 'HTTP ' + result.http_status;
+                        reason = result.error || 'Not reachable';
+                    }} else if (result.status === 'warning') {{
+                        // SSL issues - server reachable but with certificate problems
+                        isBlocked = true;
+                        reason = result.error || 'SSL certificate issue';
                     }}
 
                     // Update UI
                     dot.style.color = isSuccess ? '#22c55e' : (isBlocked ? '#f59e0b' : '#ef4444');
                     dot.textContent = isSuccess ? '✓' : (isBlocked ? '⚠' : '✗');
 
-                    var title = isSuccess ? 'OK' : (isBlocked ? 'Blocked' : 'Failed');
+                    var title = isSuccess ? 'Reachable' : (isBlocked ? 'Warning' : 'Failed');
                     title += ' (' + (result.response_time || ms + ' ms') + ')';
+                    if (result.note) title += '\\n' + result.note;
                     if (reason) title += '\\n' + reason;
-                    if (result.http_status) title += '\\nHTTP ' + result.http_status;
                     dot.title = title;
                 }})
                 .catch(function(err) {{
@@ -9368,7 +9386,8 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
         elif path == '/api/connectivity-test-url':
             # Public API endpoint for testing a single URL's connectivity
-            # Used by the help page to get accurate HTTP status instead of relying on iframe onload
+            # Tests if the server is reachable (not if it returns 200 OK)
+            # An iframe can display content even with 4xx/5xx responses
             if not user:
                 self.send_json({'success': False, 'error': 'Authentication required'}, 401)
                 return
@@ -9376,6 +9395,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             import urllib.request
             import urllib.error
             import ssl
+            import socket
 
             url = data.get('url', '')
             idx = data.get('index', 0)
@@ -9384,7 +9404,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({'success': False, 'error': 'No URL provided'})
                 return
 
-            # Create SSL context that doesn't verify certificates (for testing)
+            # Create SSL context that doesn't verify certificates (for local/self-signed)
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
@@ -9397,50 +9417,60 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
             try:
                 start_time = time_module.time()
-                req = urllib.request.Request(url, method='GET', headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
+                req = urllib.request.Request(url, method='HEAD', headers={
+                    'User-Agent': 'Mozilla/5.0 (compatible; Multi-Frames Connectivity Test)',
+                    'Accept': '*/*',
                 })
 
-                with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
+                with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
                     elapsed = round((time_module.time() - start_time) * 1000)
                     result['status'] = 'success'
                     result['response_time'] = f'{elapsed} ms'
                     result['http_status'] = response.status
 
-                    # Check for iframe-blocking headers
-                    result['x_frame_options'] = response.headers.get('X-Frame-Options', '')
-
-                    # Check Content-Security-Policy for frame-ancestors
-                    csp = response.headers.get('Content-Security-Policy', '')
-                    if 'frame-ancestors' in csp.lower():
-                        match = re.search(r'frame-ancestors\s+([^;]+)', csp, re.IGNORECASE)
-                        if match:
-                            result['csp_frame_ancestors'] = match.group(1).strip()
-
             except urllib.error.HTTPError as e:
+                # HTTP errors (4xx, 5xx) still mean the server is REACHABLE
+                # The iframe will display the error page, login page, etc.
                 elapsed = round((time_module.time() - start_time) * 1000)
-                result['status'] = 'error'
+                result['status'] = 'success'  # Server responded, even if with error
                 result['response_time'] = f'{elapsed} ms'
                 result['http_status'] = e.code
-                result['error'] = f'HTTP {e.code}: {e.reason}'
-                try:
-                    result['x_frame_options'] = e.headers.get('X-Frame-Options', '')
-                except:
-                    pass
+                result['note'] = f'HTTP {e.code} (server reachable)'
 
             except urllib.error.URLError as e:
+                # Network-level errors - server truly not reachable
+                reason = str(e.reason) if hasattr(e, 'reason') else str(e)
+                if 'timed out' in reason.lower() or isinstance(e.reason, socket.timeout):
+                    result['status'] = 'error'
+                    result['error'] = 'Connection timeout'
+                elif 'refused' in reason.lower():
+                    result['status'] = 'error'
+                    result['error'] = 'Connection refused'
+                elif 'name or service not known' in reason.lower() or 'getaddrinfo' in reason.lower():
+                    result['status'] = 'error'
+                    result['error'] = 'DNS lookup failed'
+                else:
+                    result['status'] = 'error'
+                    result['error'] = f'Network error: {reason[:30]}'
+
+            except socket.timeout:
                 result['status'] = 'error'
-                result['error'] = f'Network error: {str(e.reason)[:40]}'
+                result['error'] = 'Connection timeout'
 
             except ssl.SSLError as e:
-                result['status'] = 'error'
-                result['error'] = f'SSL Error: {str(e)[:40]}'
+                # SSL errors that the browser can't handle
+                error_str = str(e).lower()
+                if 'certificate' in error_str or 'handshake' in error_str:
+                    # Browser might still show security warning page
+                    result['status'] = 'warning'
+                    result['error'] = 'SSL certificate issue'
+                else:
+                    result['status'] = 'error'
+                    result['error'] = f'SSL error: {str(e)[:30]}'
 
             except Exception as e:
                 result['status'] = 'error'
-                result['error'] = str(e)[:50]
+                result['error'] = str(e)[:40]
 
             self.send_json({
                 'success': True,
@@ -10330,10 +10360,11 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
         elif path == '/admin/system/connectivity-test-single':
             # Server-side connectivity test for a single URL
-            # This provides accurate HTTP status checking to avoid false positives
+            # Tests if the server is reachable - HTTP errors still mean "reachable"
             import urllib.request
             import urllib.error
             import ssl
+            import socket
 
             url = data.get('url', '')
             idx = data.get('index', 0)
@@ -10342,7 +10373,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({'success': False, 'error': 'No URL provided'})
                 return
 
-            # Create SSL context that doesn't verify certificates (for testing)
+            # Create SSL context that doesn't verify certificates (for local/self-signed)
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
@@ -10355,18 +10386,16 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
             try:
                 start_time = time_module.time()
-                req = urllib.request.Request(url, method='GET', headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
+                req = urllib.request.Request(url, method='HEAD', headers={
+                    'User-Agent': 'Mozilla/5.0 (compatible; Multi-Frames Connectivity Test)',
+                    'Accept': '*/*',
                 })
 
-                with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
+                with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
                     elapsed = round((time_module.time() - start_time) * 1000)
                     result['status'] = 'success'
                     result['response_time'] = f'{elapsed} ms'
                     result['http_status'] = response.status
-                    result['content_type'] = response.headers.get('Content-Type', 'Unknown')[:50]
 
                     # Check for iframe-blocking headers
                     result['x_frame_options'] = response.headers.get('X-Frame-Options', '')
@@ -10374,36 +10403,54 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     # Check Content-Security-Policy for frame-ancestors
                     csp = response.headers.get('Content-Security-Policy', '')
                     if 'frame-ancestors' in csp.lower():
-                        # Extract the frame-ancestors directive
                         match = re.search(r'frame-ancestors\s+([^;]+)', csp, re.IGNORECASE)
                         if match:
                             result['csp_frame_ancestors'] = match.group(1).strip()
 
-                    result['server'] = response.headers.get('Server', '')[:30]
-
             except urllib.error.HTTPError as e:
+                # HTTP errors (4xx, 5xx) still mean the server is REACHABLE
                 elapsed = round((time_module.time() - start_time) * 1000)
-                result['status'] = 'error'
+                result['status'] = 'success'  # Server responded
                 result['response_time'] = f'{elapsed} ms'
                 result['http_status'] = e.code
-                result['error'] = f'HTTP {e.code}: {e.reason}'
-                # Even on HTTP errors, try to get headers
+                result['note'] = f'HTTP {e.code} (server reachable)'
                 try:
                     result['x_frame_options'] = e.headers.get('X-Frame-Options', '')
                 except:
                     pass
 
             except urllib.error.URLError as e:
+                # Network-level errors - server truly not reachable
+                reason = str(e.reason) if hasattr(e, 'reason') else str(e)
+                if 'timed out' in reason.lower() or isinstance(e.reason, socket.timeout):
+                    result['status'] = 'error'
+                    result['error'] = 'Connection timeout'
+                elif 'refused' in reason.lower():
+                    result['status'] = 'error'
+                    result['error'] = 'Connection refused'
+                elif 'name or service not known' in reason.lower() or 'getaddrinfo' in reason.lower():
+                    result['status'] = 'error'
+                    result['error'] = 'DNS lookup failed'
+                else:
+                    result['status'] = 'error'
+                    result['error'] = f'Network error: {reason[:30]}'
+
+            except socket.timeout:
                 result['status'] = 'error'
-                result['error'] = f'Network error: {str(e.reason)[:40]}'
+                result['error'] = 'Connection timeout'
 
             except ssl.SSLError as e:
-                result['status'] = 'error'
-                result['error'] = f'SSL Error: {str(e)[:40]}'
+                error_str = str(e).lower()
+                if 'certificate' in error_str or 'handshake' in error_str:
+                    result['status'] = 'warning'
+                    result['error'] = 'SSL certificate issue'
+                else:
+                    result['status'] = 'error'
+                    result['error'] = f'SSL error: {str(e)[:30]}'
 
             except Exception as e:
                 result['status'] = 'error'
-                result['error'] = str(e)[:50]
+                result['error'] = str(e)[:40]
 
             self.send_json({
                 'success': True,

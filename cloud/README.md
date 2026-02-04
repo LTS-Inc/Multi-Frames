@@ -69,7 +69,8 @@ wrangler login
 # Navigate to cloud directory
 cd cloud
 
-# Edit wrangler.toml with your KV namespace IDs
+# Copy the example config and edit with your KV namespace IDs
+cp wrangler.toml.example wrangler.toml
 nano wrangler.toml
 
 # Set secrets

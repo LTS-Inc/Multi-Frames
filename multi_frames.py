@@ -4383,8 +4383,7 @@ def render_help_page(user, config):
 
         var startTime = performance.now();
 
-        // Use server-side proxy test for accurate HTTP status checking
-        // This avoids false positives from iframe.onload firing on error pages
+        // Simple ping test - server checks if URL is reachable
         fetch(apiBase + '/api/connectivity-test-url', {{
             method: 'POST',
             headers: {{ 'Content-Type': 'application/json' }},
@@ -4394,68 +4393,25 @@ def render_help_page(user, config):
         .then(function(data) {{
             var elapsed = Math.round(performance.now() - startTime);
             var result = data.result || {{}};
-
-            // Determine success based on actual HTTP response
-            var isSuccess = result.status === 'success';
-            var isBlocked = false;
-            var reason = '';
-
-            // Check for X-Frame-Options that would block embedding
-            if (result.x_frame_options) {{
-                var xfo = result.x_frame_options.toUpperCase();
-                if (xfo === 'DENY' || xfo === 'SAMEORIGIN') {{
-                    isSuccess = false;
-                    isBlocked = true;
-                    reason = 'Blocked by X-Frame-Options';
-                }}
-            }}
-
-            // Check for CSP frame-ancestors that would block embedding
-            if (result.csp_frame_ancestors) {{
-                var csp = result.csp_frame_ancestors.toLowerCase();
-                if (csp.includes("'none'") || (csp.includes("'self'") && !csp.includes('*'))) {{
-                    isSuccess = false;
-                    isBlocked = true;
-                    reason = 'Blocked by Content-Security-Policy';
-                }}
-            }}
-
-            // Handle error cases - note: 'success' status includes HTTP 4xx/5xx (server reachable)
-            if (result.status === 'error') {{
-                isSuccess = false;
-                reason = result.error || 'Not reachable';
-            }} else if (result.status === 'warning') {{
-                // SSL issues - server reachable but with certificate problems
-                isBlocked = true;
-                reason = result.error || 'SSL certificate issue';
-            }}
+            var isSuccess = result.reachable === true;
 
             // Update UI
-            dot.className = 'status-dot ' + (isSuccess ? 'connected' : (isBlocked ? 'warning' : 'error'));
-            dot.textContent = isSuccess ? '✓' : (isBlocked ? '⚠' : '✗');
+            dot.className = 'status-dot ' + (isSuccess ? 'connected' : 'error');
+            dot.textContent = isSuccess ? '✓' : '✗';
 
             if (timeCell) {{
-                var displayTime = result.response_time || (elapsed + ' ms');
-                // Parse the time for color coding
-                var timeMs = parseInt(displayTime);
                 if (isSuccess) {{
-                    var cls = timeMs < 1000 ? 'good' : (timeMs < 3000 ? 'warning' : 'error');
-                    timeCell.innerHTML = '<span class="test-metric ' + cls + '">' + displayTime + '</span>';
-                }} else if (isBlocked) {{
-                    timeCell.innerHTML = '<span class="test-metric warning">Blocked</span>';
+                    var cls = elapsed < 1000 ? 'good' : (elapsed < 3000 ? 'warning' : 'error');
+                    timeCell.innerHTML = '<span class="test-metric ' + cls + '">' + elapsed + ' ms</span>';
                 }} else {{
                     timeCell.innerHTML = '<span class="test-metric error">Failed</span>';
                 }}
             }}
 
-            // Store result with additional details
             helpTestResults[idx] = {{
                 success: isSuccess,
-                blocked: isBlocked,
                 time: elapsed,
-                name: name || 'Unknown',
-                reason: reason,
-                httpStatus: result.http_status
+                name: name || 'Unknown'
             }};
 
             checkForFailures();
@@ -5444,13 +5400,10 @@ def render_main_page(user, config):
         <script>
         {fallback_js}
 
-        // Iframe URLs to test for connectivity
         var iframeTestData = {iframe_test_json};
         var apiBase = window.location.origin;
-        var iframeLoadState = {{}};  // Track load state per iframe
-        var LOAD_TIMEOUT = 15000;  // 15 seconds timeout
 
-        // Prevent browser back button from navigating away when iframes are present
+        // Prevent back button issues with iframes
         (function() {{
             if (document.querySelectorAll('iframe').length > 0) {{
                 if (!history.state || !history.state.iframePage) {{
@@ -5490,156 +5443,40 @@ def render_main_page(user, config):
             }}
         }}
 
-        function setIframeStatus(index, status, reason) {{
+        function setStatus(index, reachable) {{
             var dot = document.getElementById('status-' + index);
             if (dot) {{
-                dot.classList.remove('loading', 'connected', 'error', 'warning');
-                if (status === 'connected') {{
-                    dot.classList.add('connected');
-                    dot.title = reason || 'Loaded';
-                    hideFallback(index);
-                }} else if (status === 'warning') {{
-                    dot.classList.add('warning');
-                    dot.title = reason || 'Slow';
-                    hideFallback(index);
-                }} else if (status === 'loading') {{
-                    dot.classList.add('loading');
-                    dot.title = reason || 'Loading...';
-                }} else {{
-                    dot.classList.add('error');
-                    dot.title = reason || 'Failed to load';
-                    showFallback(index);
-                }}
+                dot.classList.remove('loading', 'connected', 'error');
+                dot.classList.add(reachable ? 'connected' : 'error');
+                dot.title = reachable ? 'Reachable' : 'Unreachable';
+                if (reachable) hideFallback(index); else showFallback(index);
             }}
         }}
 
-        // Monitor iframe load using actual iframe events
-        function monitorIframe(index) {{
-            var iframe = document.getElementById('iframe-' + index);
-            if (!iframe) return;
+        function pingUrl(index, url) {{
+            var dot = document.getElementById('status-' + index);
+            if (dot) {{ dot.classList.add('loading'); dot.title = 'Testing...'; }}
 
-            // Initialize state
-            iframeLoadState[index] = {{
-                loaded: false,
-                startTime: Date.now(),
-                timeoutId: null
-            }};
-
-            // Check if iframe might have already loaded (page load complete)
-            // For cross-origin iframes, we can't check content, but we can check if
-            // the iframe has a contentWindow which indicates it has loaded something
-            var alreadyLoaded = false;
-            try {{
-                // If we can access contentWindow, the iframe has loaded
-                // (even if cross-origin, contentWindow exists after load)
-                if (iframe.contentWindow && iframe.contentWindow.document) {{
-                    alreadyLoaded = true;
-                }}
-            }} catch (e) {{
-                // Cross-origin - contentWindow exists but document throws
-                // This means the iframe has loaded cross-origin content
-                if (iframe.contentWindow) {{
-                    alreadyLoaded = true;
-                }}
-            }}
-
-            if (alreadyLoaded) {{
-                iframeLoadState[index].loaded = true;
-                setIframeStatus(index, 'connected', 'Loaded');
-                return;
-            }}
-
-            // Set loading status
-            setIframeStatus(index, 'loading', 'Loading...');
-
-            // Set timeout for slow/hanging pages
-            iframeLoadState[index].timeoutId = setTimeout(function() {{
-                if (!iframeLoadState[index].loaded) {{
-                    setIframeStatus(index, 'error', 'Timeout - page not responding');
-                }}
-            }}, LOAD_TIMEOUT);
-
-            // Listen for load event
-            iframe.addEventListener('load', function onLoad() {{
-                if (iframeLoadState[index].timeoutId) {{
-                    clearTimeout(iframeLoadState[index].timeoutId);
-                }}
-                iframeLoadState[index].loaded = true;
-                var loadTime = Date.now() - iframeLoadState[index].startTime;
-                if (loadTime > 5000) {{
-                    setIframeStatus(index, 'connected', 'Loaded (slow: ' + Math.round(loadTime/1000) + 's)');
-                }} else {{
-                    setIframeStatus(index, 'connected', 'Loaded (' + loadTime + 'ms)');
-                }}
-                iframe.removeEventListener('load', onLoad);
-            }});
-
-            // Listen for error event
-            iframe.addEventListener('error', function onError() {{
-                if (iframeLoadState[index].timeoutId) {{
-                    clearTimeout(iframeLoadState[index].timeoutId);
-                }}
-                if (!iframeLoadState[index].loaded) {{
-                    setIframeStatus(index, 'error', 'Failed to load');
-                }}
-                iframe.removeEventListener('error', onError);
-            }});
-
-            // If page already loaded but iframe hasn't, force reload to catch event
-            if (document.readyState === 'complete') {{
-                var src = iframe.src;
-                if (src) {{
-                    iframe.src = '';
-                    setTimeout(function() {{ iframe.src = src; }}, 10);
-                }}
-            }}
+            fetch(apiBase + '/api/connectivity-test-url', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ url: url, index: index }})
+            }})
+            .then(function(r) {{ return r.json(); }})
+            .then(function(data) {{
+                setStatus(index, data.result && data.result.reachable === true);
+            }})
+            .catch(function() {{ setStatus(index, false); }});
         }}
 
-        // Initialize monitoring for all iframes on page load
-        function initIframeMonitoring() {{
-            iframeTestData.forEach(function(item) {{
-                monitorIframe(item.index);
+        function testAll() {{
+            iframeTestData.forEach(function(item, i) {{
+                setTimeout(function() {{ pingUrl(item.index, item.url); }}, i * 100);
             }});
         }}
 
-        // Run on page load
-        if (document.readyState === 'complete') {{
-            initIframeMonitoring();
-        }} else {{
-            window.addEventListener('load', initIframeMonitoring);
-        }}
-
-        // Periodic re-check every 60 seconds (reload iframes that failed)
-        setInterval(function() {{
-            iframeTestData.forEach(function(item) {{
-                var state = iframeLoadState[item.index];
-                // Only retry failed iframes
-                if (state && !state.loaded) {{
-                    var iframe = document.getElementById('iframe-' + item.index);
-                    if (iframe && iframe.src) {{
-                        // Reset and retry
-                        iframeLoadState[item.index].startTime = Date.now();
-                        iframeLoadState[item.index].loaded = false;
-                        setIframeStatus(item.index, 'loading', 'Retrying...');
-
-                        // Clear old timeout
-                        if (state.timeoutId) clearTimeout(state.timeoutId);
-
-                        // Set new timeout
-                        iframeLoadState[item.index].timeoutId = setTimeout(function() {{
-                            if (!iframeLoadState[item.index].loaded) {{
-                                setIframeStatus(item.index, 'error', 'Timeout - page not responding');
-                            }}
-                        }}, LOAD_TIMEOUT);
-
-                        // Force reload by resetting src
-                        var src = iframe.src;
-                        iframe.src = '';
-                        iframe.src = src;
-                    }}
-                }}
-            }});
-        }}, 60000);
+        window.addEventListener('load', testAll);
+        setInterval(testAll, 60000);
         </script>
         """
 
@@ -9457,9 +9294,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({'success': False, 'error': str(e)})
 
         elif path == '/api/connectivity-test-url':
-            # Public API endpoint for testing a single URL's connectivity
-            # Tests if the server is reachable (not if it returns 200 OK)
-            # An iframe can display content even with 4xx/5xx responses
+            # Simple ping test: can we reach the URL?
+            # Returns reachable: true if server responds (any HTTP status)
+            # Returns reachable: false if network error (timeout, refused, DNS fail)
             if not user:
                 self.send_json({'success': False, 'error': 'Authentication required'}, 401)
                 return
@@ -9476,102 +9313,30 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({'success': False, 'error': 'No URL provided'})
                 return
 
-            # Create SSL context that doesn't verify certificates (for local/self-signed)
+            # Create SSL context that doesn't verify certificates
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
 
-            result = {
-                'index': idx,
-                'url': url[:100],
-                'status': 'testing'
-            }
-
-            # Use browser-like headers for better compatibility
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Connection': 'close',
-            }
-
-            def try_request(method='GET'):
-                """Try to connect with specified method."""
-                req = urllib.request.Request(url, method=method, headers=headers)
-                start = time_module.time()
-                with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
-                    elapsed = round((time_module.time() - start) * 1000)
-                    return {
-                        'status': 'success',
-                        'response_time': f'{elapsed} ms',
-                        'http_status': response.status
-                    }
+            reachable = False
 
             try:
-                # Try GET request (most compatible)
-                start_time = time_module.time()
-                res = try_request('GET')
-                result.update(res)
-
-            except urllib.error.HTTPError as e:
-                # HTTP errors (4xx, 5xx) still mean the server is REACHABLE
-                # The iframe will display the error page, login page, etc.
-                elapsed = round((time_module.time() - start_time) * 1000)
-                result['status'] = 'success'  # Server responded
-                result['response_time'] = f'{elapsed} ms'
-                result['http_status'] = e.code
-                result['note'] = f'HTTP {e.code} (server reachable)'
-
-            except urllib.error.URLError as e:
-                # Network-level errors - server truly not reachable
-                reason = str(e.reason) if hasattr(e, 'reason') else str(e)
-                reason_lower = reason.lower()
-                if 'timed out' in reason_lower or isinstance(getattr(e, 'reason', None), socket.timeout):
-                    result['status'] = 'error'
-                    result['error'] = 'Connection timeout'
-                elif 'refused' in reason_lower:
-                    result['status'] = 'error'
-                    result['error'] = 'Connection refused'
-                elif 'name or service not known' in reason_lower or 'getaddrinfo' in reason_lower or 'nodename nor servname' in reason_lower:
-                    result['status'] = 'error'
-                    result['error'] = 'DNS lookup failed'
-                elif 'no route to host' in reason_lower:
-                    result['status'] = 'error'
-                    result['error'] = 'No route to host'
-                elif 'network is unreachable' in reason_lower:
-                    result['status'] = 'error'
-                    result['error'] = 'Network unreachable'
-                elif 'ssl' in reason_lower or 'certificate' in reason_lower:
-                    result['status'] = 'warning'
-                    result['error'] = 'SSL/Certificate issue'
-                else:
-                    result['status'] = 'error'
-                    result['error'] = f'Connection failed'
-
-            except socket.timeout:
-                result['status'] = 'error'
-                result['error'] = 'Connection timeout'
-
-            except ssl.SSLError as e:
-                # SSL errors - browser might still show warning page
-                result['status'] = 'warning'
-                result['error'] = 'SSL certificate issue'
-
-            except Exception as e:
-                error_str = str(e).lower()
-                if 'timeout' in error_str:
-                    result['status'] = 'error'
-                    result['error'] = 'Connection timeout'
-                elif 'refused' in error_str:
-                    result['status'] = 'error'
-                    result['error'] = 'Connection refused'
-                else:
-                    result['status'] = 'error'
-                    result['error'] = 'Connection failed'
+                req = urllib.request.Request(url, method='HEAD', headers={
+                    'User-Agent': 'Mozilla/5.0 (compatible; Multi-Frames)',
+                    'Connection': 'close'
+                })
+                with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
+                    reachable = True  # Got a response
+            except urllib.error.HTTPError:
+                # HTTP 4xx/5xx still means server is reachable
+                reachable = True
+            except:
+                # Any other error means not reachable
+                reachable = False
 
             self.send_json({
                 'success': True,
-                'result': result
+                'result': {'index': idx, 'reachable': reachable}
             })
 
         elif not user:

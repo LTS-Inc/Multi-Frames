@@ -772,7 +772,8 @@ class CloudAgent:
                 data=json.dumps(heartbeat_data).encode('utf-8'),
                 headers={
                     'Content-Type': 'application/json',
-                    'X-Device-Key': self.device_key
+                    'X-Device-Key': self.device_key,
+                    'User-Agent': f'Multi-Frames/{VERSION}'
                 },
                 method='POST'
             )
@@ -807,7 +808,10 @@ class CloudAgent:
         try:
             req = urllib.request.Request(
                 f"{self.cloud_url}/api/config/pull",
-                headers={'X-Device-Key': self.device_key},
+                headers={
+                    'X-Device-Key': self.device_key,
+                    'User-Agent': f'Multi-Frames/{VERSION}'
+                },
                 method='GET'
             )
 
@@ -862,7 +866,8 @@ class CloudAgent:
                 data=json.dumps({'config': upload_config}).encode('utf-8'),
                 headers={
                     'Content-Type': 'application/json',
-                    'X-Device-Key': self.device_key
+                    'X-Device-Key': self.device_key,
+                    'User-Agent': f'Multi-Frames/{VERSION}'
                 },
                 method='POST'
             )

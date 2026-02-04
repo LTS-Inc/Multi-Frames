@@ -5525,6 +5525,30 @@ def render_main_page(user, config):
                 timeoutId: null
             }};
 
+            // Check if iframe might have already loaded (page load complete)
+            // For cross-origin iframes, we can't check content, but we can check if
+            // the iframe has a contentWindow which indicates it has loaded something
+            var alreadyLoaded = false;
+            try {{
+                // If we can access contentWindow, the iframe has loaded
+                // (even if cross-origin, contentWindow exists after load)
+                if (iframe.contentWindow && iframe.contentWindow.document) {{
+                    alreadyLoaded = true;
+                }}
+            }} catch (e) {{
+                // Cross-origin - contentWindow exists but document throws
+                // This means the iframe has loaded cross-origin content
+                if (iframe.contentWindow) {{
+                    alreadyLoaded = true;
+                }}
+            }}
+
+            if (alreadyLoaded) {{
+                iframeLoadState[index].loaded = true;
+                setIframeStatus(index, 'connected', 'Loaded');
+                return;
+            }}
+
             // Set loading status
             setIframeStatus(index, 'loading', 'Loading...');
 
@@ -5536,7 +5560,7 @@ def render_main_page(user, config):
             }}, LOAD_TIMEOUT);
 
             // Listen for load event
-            iframe.addEventListener('load', function() {{
+            iframe.addEventListener('load', function onLoad() {{
                 if (iframeLoadState[index].timeoutId) {{
                     clearTimeout(iframeLoadState[index].timeoutId);
                 }}
@@ -5547,17 +5571,28 @@ def render_main_page(user, config):
                 }} else {{
                     setIframeStatus(index, 'connected', 'Loaded (' + loadTime + 'ms)');
                 }}
+                iframe.removeEventListener('load', onLoad);
             }});
 
             // Listen for error event
-            iframe.addEventListener('error', function() {{
+            iframe.addEventListener('error', function onError() {{
                 if (iframeLoadState[index].timeoutId) {{
                     clearTimeout(iframeLoadState[index].timeoutId);
                 }}
                 if (!iframeLoadState[index].loaded) {{
                     setIframeStatus(index, 'error', 'Failed to load');
                 }}
+                iframe.removeEventListener('error', onError);
             }});
+
+            // If page already loaded but iframe hasn't, force reload to catch event
+            if (document.readyState === 'complete') {{
+                var src = iframe.src;
+                if (src) {{
+                    iframe.src = '';
+                    setTimeout(function() {{ iframe.src = src; }}, 10);
+                }}
+            }}
         }}
 
         // Initialize monitoring for all iframes on page load

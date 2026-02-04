@@ -5447,27 +5447,23 @@ def render_main_page(user, config):
         // Iframe URLs to test for connectivity
         var iframeTestData = {iframe_test_json};
         var apiBase = window.location.origin;
+        var iframeLoadState = {{}};  // Track load state per iframe
+        var LOAD_TIMEOUT = 15000;  // 15 seconds timeout
 
         // Prevent browser back button from navigating away when iframes are present
-        // This creates a history entry so back button stays on this page
         (function() {{
-            // Only apply if there are iframes on the page
             if (document.querySelectorAll('iframe').length > 0) {{
-                // Push a state when page loads
                 if (!history.state || !history.state.iframePage) {{
                     history.pushState({{ iframePage: true }}, '', window.location.href);
                 }}
-                
-                // Handle popstate (back button)
                 window.addEventListener('popstate', function(e) {{
-                    // If navigating away from our page, push state again to stay here
                     if (!e.state || !e.state.iframePage) {{
                         history.pushState({{ iframePage: true }}, '', window.location.href);
                     }}
                 }});
             }}
         }})();
-        
+
         function showFallback(index) {{
             if (!fallbackConfig.enabled) return;
             var iframe = document.getElementById('iframe-' + index);
@@ -5481,7 +5477,7 @@ def render_main_page(user, config):
                     '<span class="fallback-text">' + fallbackConfig.text + '</span></div>';
             }}
         }}
-        
+
         function hideFallback(index) {{
             var iframe = document.getElementById('iframe-' + index);
             var fallback = document.getElementById('fallback-' + index);
@@ -5493,84 +5489,125 @@ def render_main_page(user, config):
                 fallback.style.display = 'none';
             }}
         }}
-        
+
         function setIframeStatus(index, status, reason) {{
             var dot = document.getElementById('status-' + index);
             if (dot) {{
                 dot.classList.remove('loading', 'connected', 'error', 'warning');
                 if (status === 'connected') {{
                     dot.classList.add('connected');
-                    dot.title = reason || 'Reachable';
+                    dot.title = reason || 'Loaded';
                     hideFallback(index);
                 }} else if (status === 'warning') {{
                     dot.classList.add('warning');
-                    dot.title = reason || 'SSL issue';
+                    dot.title = reason || 'Slow';
                     hideFallback(index);
+                }} else if (status === 'loading') {{
+                    dot.classList.add('loading');
+                    dot.title = reason || 'Loading...';
                 }} else {{
                     dot.classList.add('error');
-                    dot.title = reason || 'Not reachable';
+                    dot.title = reason || 'Failed to load';
                     showFallback(index);
                 }}
             }}
         }}
 
-        // Test iframe URL using server-side connectivity test
-        function testIframeUrl(index, url) {{
-            var dot = document.getElementById('status-' + index);
-            if (!dot) return;
+        // Monitor iframe load using actual iframe events
+        function monitorIframe(index) {{
+            var iframe = document.getElementById('iframe-' + index);
+            if (!iframe) return;
 
-            fetch(apiBase + '/api/connectivity-test-url', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ url: url }})
-            }})
-            .then(function(response) {{ return response.json(); }})
-            .then(function(data) {{
-                var result = data.result || {{}};
-                // Reachable: success or warning status
-                if (result.status === 'success') {{
-                    var note = result.note || (result.http_status ? 'HTTP ' + result.http_status : 'Reachable');
-                    setIframeStatus(index, 'connected', note);
-                }} else if (result.status === 'warning') {{
-                    setIframeStatus(index, 'warning', result.error || 'SSL issue');
-                }} else {{
-                    setIframeStatus(index, 'error', result.error || 'Not reachable');
+            // Initialize state
+            iframeLoadState[index] = {{
+                loaded: false,
+                startTime: Date.now(),
+                timeoutId: null
+            }};
+
+            // Set loading status
+            setIframeStatus(index, 'loading', 'Loading...');
+
+            // Set timeout for slow/hanging pages
+            iframeLoadState[index].timeoutId = setTimeout(function() {{
+                if (!iframeLoadState[index].loaded) {{
+                    setIframeStatus(index, 'error', 'Timeout - page not responding');
                 }}
-            }})
-            .catch(function() {{
-                setIframeStatus(index, 'error', 'Test failed');
+            }}, LOAD_TIMEOUT);
+
+            // Listen for load event
+            iframe.addEventListener('load', function() {{
+                if (iframeLoadState[index].timeoutId) {{
+                    clearTimeout(iframeLoadState[index].timeoutId);
+                }}
+                iframeLoadState[index].loaded = true;
+                var loadTime = Date.now() - iframeLoadState[index].startTime;
+                if (loadTime > 5000) {{
+                    setIframeStatus(index, 'connected', 'Loaded (slow: ' + Math.round(loadTime/1000) + 's)');
+                }} else {{
+                    setIframeStatus(index, 'connected', 'Loaded (' + loadTime + 'ms)');
+                }}
+            }});
+
+            // Listen for error event
+            iframe.addEventListener('error', function() {{
+                if (iframeLoadState[index].timeoutId) {{
+                    clearTimeout(iframeLoadState[index].timeoutId);
+                }}
+                if (!iframeLoadState[index].loaded) {{
+                    setIframeStatus(index, 'error', 'Failed to load');
+                }}
             }});
         }}
 
-        // Test all iframe URLs on page load
-        function testAllIframes() {{
-            iframeTestData.forEach(function(item, i) {{
-                // Stagger tests by 200ms
-                setTimeout(function() {{
-                    testIframeUrl(item.index, item.url);
-                }}, i * 200);
+        // Initialize monitoring for all iframes on page load
+        function initIframeMonitoring() {{
+            iframeTestData.forEach(function(item) {{
+                monitorIframe(item.index);
             }});
         }}
 
-        // Run connectivity test on page load
-        if (iframeTestData.length > 0) {{
-            // Wait for page to finish loading, then test
-            if (document.readyState === 'complete') {{
-                testAllIframes();
-            }} else {{
-                window.addEventListener('load', testAllIframes);
-            }}
+        // Run on page load
+        if (document.readyState === 'complete') {{
+            initIframeMonitoring();
+        }} else {{
+            window.addEventListener('load', initIframeMonitoring);
         }}
 
-        // Periodic connectivity check every 60 seconds
+        // Periodic re-check every 60 seconds (reload iframes that failed)
         setInterval(function() {{
-            if (iframeTestData.length > 0) {{
-                testAllIframes();
-            }}
+            iframeTestData.forEach(function(item) {{
+                var state = iframeLoadState[item.index];
+                // Only retry failed iframes
+                if (state && !state.loaded) {{
+                    var iframe = document.getElementById('iframe-' + item.index);
+                    if (iframe && iframe.src) {{
+                        // Reset and retry
+                        iframeLoadState[item.index].startTime = Date.now();
+                        iframeLoadState[item.index].loaded = false;
+                        setIframeStatus(item.index, 'loading', 'Retrying...');
+
+                        // Clear old timeout
+                        if (state.timeoutId) clearTimeout(state.timeoutId);
+
+                        // Set new timeout
+                        iframeLoadState[item.index].timeoutId = setTimeout(function() {{
+                            if (!iframeLoadState[item.index].loaded) {{
+                                setIframeStatus(item.index, 'error', 'Timeout - page not responding');
+                            }}
+                        }}, LOAD_TIMEOUT);
+
+                        // Force reload by resetting src
+                        var src = iframe.src;
+                        iframe.src = '';
+                        iframe.src = src;
+                    }}
+                }}
+            }});
         }}, 60000);
         </script>
         """
-        
+
         # Command button script (for button widgets)
         command_script = """
         <script>

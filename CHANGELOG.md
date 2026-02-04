@@ -5,6 +5,20 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] - 2026-02-04
+
+### Changed
+- **Simplified Connectivity Test**: Completely redesigned for reliability
+  - Server now returns simple `reachable: true/false` instead of complex status
+  - Any HTTP response (including 4xx/5xx) = reachable
+  - Only network errors (timeout, refused, DNS fail) = not reachable
+  - Removed complex X-Frame-Options and CSP checking that caused false failures
+  - Frontend JavaScript simplified to basic true/false status display
+
+### Fixed
+- Connectivity test no longer shows false failures for accessible iframes
+- Help page connectivity test updated to use simplified API
+
 ## [1.2.2] - 2026-02-04
 
 ### Fixed

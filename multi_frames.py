@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.1.10
+Multi-Frames v1.2.3
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -28,22 +28,26 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
-    v1.1.11 (2026-01-26)
-        - Added Watchdog tab in admin portal
-        - 30-day server uptime tracking and history
-        - Uptime percentage calculations and visualizations
-        - Persistent uptime data across server restarts
-        - Downtime event logging and tracking
-        - Real-time server health monitoring dashboard
+    v1.2.3 (2026-02-04)
+        - Simplified connectivity test to basic ping check
+        - Server returns reachable: true/false for URL tests
+        - Any HTTP response (including 4xx/5xx) = reachable
+        - Network errors (timeout, refused, DNS fail) = not reachable
 
-    v1.1.10 (2025-01-26)
-        - Modern status dashboard at top of admin page
-        - Server health banner with uptime and status
-        - Raspberry Pi info card (temp, memory, disk, power)
-        - Modern tabbed logs viewer (Requests, Logs, Errors)
-        - Streamlined System panel with collapsible sections
-        - Connectivity testing with visual status indicators
-        - Improved overall admin UI organization
+    v1.2.2 (2026-02-04)
+        - Fixed connectivity test false negatives
+        - Cloud settings in admin panel with status indicator
+        - Fixed Cloudflare 403 error with proper User-Agent headers
+
+    v1.2.1 (2026-02-04)
+        - Cloud ID settings in admin Settings tab
+        - Cloud connection status indicator on admin page
+
+    v1.2.0 (2026-02-03)
+        - Modern cloud dashboard for remote management
+        - Google Workspace authentication
+        - Branding customization (logo, colors, dark mode)
+        - Config sync to 50+ devices
 
     v1.1.9 (2025-01-26)
         - Git clone URL field for easy repository configuration
@@ -193,7 +197,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 VERSION_DATE = "2026-02-04"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -1704,7 +1708,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.1.10 by LTS, Inc.",
+            "text": "Multi-Frames v1.2.3 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -3989,7 +3993,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.1.10 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.2.3 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -6275,7 +6279,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.1.10 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.2.3 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -9931,7 +9935,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.1.10 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.2.3 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         

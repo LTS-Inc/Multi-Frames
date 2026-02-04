@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.2.2-2026--02--04-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.2.3-2026--02--04-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -25,7 +25,7 @@ Built for home dashboards, kiosks, and digital signage
 
 <br>
 
-[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v122) • [Documentation](#-configuration)
+[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v123) • [Documentation](#-configuration)
 
 </div>
 
@@ -239,18 +239,18 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.2.2
+## 🆕 What's New in v1.2.3
 
 <table>
 <tr>
 <td>
 
-### 🔧 Improved Connectivity Test
+### 🔧 Simplified Connectivity Test
 
-- Fixed false negatives in iframe status
-- HTTP 4xx/5xx now shows "reachable"
-- Only network errors marked as failed
-- Faster HEAD requests (vs GET)
+- Basic ping check for URL reachability
+- Server returns simple true/false status
+- Any HTTP response = reachable (even 4xx/5xx)
+- Network errors only = not reachable
 
 </td>
 <td>
@@ -522,6 +522,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.2.3** | 2026-02-04 | Simplified connectivity test to basic ping check |
 | **1.2.2** | 2026-02-04 | Improved connectivity test accuracy, fixed false negatives |
 | **1.2.1** | 2026-02-04 | Cloud settings in admin panel, connection status indicator |
 | **1.2.0** | 2026-02-03 | Modern cloud dashboard, branding customization, responsive UI |

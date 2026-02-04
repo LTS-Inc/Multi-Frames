@@ -9415,24 +9415,37 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 'status': 'testing'
             }
 
-            try:
-                start_time = time_module.time()
-                req = urllib.request.Request(url, method='HEAD', headers={
-                    'User-Agent': 'Mozilla/5.0 (compatible; Multi-Frames Connectivity Test)',
-                    'Accept': '*/*',
-                })
+            # Use browser-like headers for better compatibility
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'close',
+            }
 
-                with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
-                    elapsed = round((time_module.time() - start_time) * 1000)
-                    result['status'] = 'success'
-                    result['response_time'] = f'{elapsed} ms'
-                    result['http_status'] = response.status
+            def try_request(method='GET'):
+                """Try to connect with specified method."""
+                req = urllib.request.Request(url, method=method, headers=headers)
+                start = time_module.time()
+                with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
+                    elapsed = round((time_module.time() - start) * 1000)
+                    return {
+                        'status': 'success',
+                        'response_time': f'{elapsed} ms',
+                        'http_status': response.status
+                    }
+
+            try:
+                # Try GET request (most compatible)
+                start_time = time_module.time()
+                res = try_request('GET')
+                result.update(res)
 
             except urllib.error.HTTPError as e:
                 # HTTP errors (4xx, 5xx) still mean the server is REACHABLE
                 # The iframe will display the error page, login page, etc.
                 elapsed = round((time_module.time() - start_time) * 1000)
-                result['status'] = 'success'  # Server responded, even if with error
+                result['status'] = 'success'  # Server responded
                 result['response_time'] = f'{elapsed} ms'
                 result['http_status'] = e.code
                 result['note'] = f'HTTP {e.code} (server reachable)'
@@ -9440,37 +9453,49 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             except urllib.error.URLError as e:
                 # Network-level errors - server truly not reachable
                 reason = str(e.reason) if hasattr(e, 'reason') else str(e)
-                if 'timed out' in reason.lower() or isinstance(e.reason, socket.timeout):
+                reason_lower = reason.lower()
+                if 'timed out' in reason_lower or isinstance(getattr(e, 'reason', None), socket.timeout):
                     result['status'] = 'error'
                     result['error'] = 'Connection timeout'
-                elif 'refused' in reason.lower():
+                elif 'refused' in reason_lower:
                     result['status'] = 'error'
                     result['error'] = 'Connection refused'
-                elif 'name or service not known' in reason.lower() or 'getaddrinfo' in reason.lower():
+                elif 'name or service not known' in reason_lower or 'getaddrinfo' in reason_lower or 'nodename nor servname' in reason_lower:
                     result['status'] = 'error'
                     result['error'] = 'DNS lookup failed'
+                elif 'no route to host' in reason_lower:
+                    result['status'] = 'error'
+                    result['error'] = 'No route to host'
+                elif 'network is unreachable' in reason_lower:
+                    result['status'] = 'error'
+                    result['error'] = 'Network unreachable'
+                elif 'ssl' in reason_lower or 'certificate' in reason_lower:
+                    result['status'] = 'warning'
+                    result['error'] = 'SSL/Certificate issue'
                 else:
                     result['status'] = 'error'
-                    result['error'] = f'Network error: {reason[:30]}'
+                    result['error'] = f'Connection failed'
 
             except socket.timeout:
                 result['status'] = 'error'
                 result['error'] = 'Connection timeout'
 
             except ssl.SSLError as e:
-                # SSL errors that the browser can't handle
-                error_str = str(e).lower()
-                if 'certificate' in error_str or 'handshake' in error_str:
-                    # Browser might still show security warning page
-                    result['status'] = 'warning'
-                    result['error'] = 'SSL certificate issue'
-                else:
-                    result['status'] = 'error'
-                    result['error'] = f'SSL error: {str(e)[:30]}'
+                # SSL errors - browser might still show warning page
+                result['status'] = 'warning'
+                result['error'] = 'SSL certificate issue'
 
             except Exception as e:
-                result['status'] = 'error'
-                result['error'] = str(e)[:40]
+                error_str = str(e).lower()
+                if 'timeout' in error_str:
+                    result['status'] = 'error'
+                    result['error'] = 'Connection timeout'
+                elif 'refused' in error_str:
+                    result['status'] = 'error'
+                    result['error'] = 'Connection refused'
+                else:
+                    result['status'] = 'error'
+                    result['error'] = 'Connection failed'
 
             self.send_json({
                 'success': True,
@@ -10384,14 +10409,19 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 'status': 'testing'
             }
 
+            # Use browser-like headers for better compatibility
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'close',
+            }
+
             try:
                 start_time = time_module.time()
-                req = urllib.request.Request(url, method='HEAD', headers={
-                    'User-Agent': 'Mozilla/5.0 (compatible; Multi-Frames Connectivity Test)',
-                    'Accept': '*/*',
-                })
+                req = urllib.request.Request(url, method='GET', headers=headers)
 
-                with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
+                with urllib.request.urlopen(req, timeout=10, context=ssl_context) as response:
                     elapsed = round((time_module.time() - start_time) * 1000)
                     result['status'] = 'success'
                     result['response_time'] = f'{elapsed} ms'
@@ -10422,35 +10452,49 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             except urllib.error.URLError as e:
                 # Network-level errors - server truly not reachable
                 reason = str(e.reason) if hasattr(e, 'reason') else str(e)
-                if 'timed out' in reason.lower() or isinstance(e.reason, socket.timeout):
+                reason_lower = reason.lower()
+                if 'timed out' in reason_lower or isinstance(getattr(e, 'reason', None), socket.timeout):
                     result['status'] = 'error'
                     result['error'] = 'Connection timeout'
-                elif 'refused' in reason.lower():
+                elif 'refused' in reason_lower:
                     result['status'] = 'error'
                     result['error'] = 'Connection refused'
-                elif 'name or service not known' in reason.lower() or 'getaddrinfo' in reason.lower():
+                elif 'name or service not known' in reason_lower or 'getaddrinfo' in reason_lower or 'nodename nor servname' in reason_lower:
                     result['status'] = 'error'
                     result['error'] = 'DNS lookup failed'
+                elif 'no route to host' in reason_lower:
+                    result['status'] = 'error'
+                    result['error'] = 'No route to host'
+                elif 'network is unreachable' in reason_lower:
+                    result['status'] = 'error'
+                    result['error'] = 'Network unreachable'
+                elif 'ssl' in reason_lower or 'certificate' in reason_lower:
+                    result['status'] = 'warning'
+                    result['error'] = 'SSL/Certificate issue'
                 else:
                     result['status'] = 'error'
-                    result['error'] = f'Network error: {reason[:30]}'
+                    result['error'] = 'Connection failed'
 
             except socket.timeout:
                 result['status'] = 'error'
                 result['error'] = 'Connection timeout'
 
             except ssl.SSLError as e:
-                error_str = str(e).lower()
-                if 'certificate' in error_str or 'handshake' in error_str:
-                    result['status'] = 'warning'
-                    result['error'] = 'SSL certificate issue'
-                else:
-                    result['status'] = 'error'
-                    result['error'] = f'SSL error: {str(e)[:30]}'
+                # SSL errors - browser might still show warning page
+                result['status'] = 'warning'
+                result['error'] = 'SSL certificate issue'
 
             except Exception as e:
-                result['status'] = 'error'
-                result['error'] = str(e)[:40]
+                error_str = str(e).lower()
+                if 'timeout' in error_str:
+                    result['status'] = 'error'
+                    result['error'] = 'Connection timeout'
+                elif 'refused' in error_str:
+                    result['status'] = 'error'
+                    result['error'] = 'Connection refused'
+                else:
+                    result['status'] = 'error'
+                    result['error'] = 'Connection failed'
 
             self.send_json({
                 'success': True,

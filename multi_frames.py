@@ -193,8 +193,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.1.15"
-VERSION_DATE = "2026-02-03"
+VERSION = "1.2.2"
+VERSION_DATE = "2026-02-04"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."

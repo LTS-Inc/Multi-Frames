@@ -6498,6 +6498,36 @@ def render_admin_page(user, config, message=None, error=None):
             </form>
         </div>
     </div>
+
+    <div class="admin-section">
+        <h3>☁️ Cloud Sync</h3>
+        <div class="admin-content">
+            <p style="color:var(--text-secondary);font-size:0.9rem;margin-bottom:1rem;">Connect to Multi-Frames Cloud for remote management, config sync, and monitoring.</p>
+            <form method="POST" action="/admin/settings/cloud">
+                <div class="toggle-row" style="padding:1rem;background:var(--bg-primary);border-radius:var(--radius);margin-bottom:1rem;">
+                    <div>
+                        <label style="margin-bottom:0;">Enable Cloud Sync</label>
+                        <small style="display:block;color:var(--text-secondary);margin-top:0.25rem;">Connect this device to your cloud dashboard</small>
+                    </div>
+                    <select name="cloud_enabled" style="width:auto;">
+                        <option value="0" {"selected" if not config.get('cloud', {}).get('enabled', False) else ""}>Off</option>
+                        <option value="1" {"selected" if config.get('cloud', {}).get('enabled', False) else ""}>On</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin-bottom:1rem;">
+                    <label>Cloud URL</label>
+                    <input type="url" name="cloud_url" value="{escape_html(config.get('cloud', {}).get('url', ''))}" placeholder="https://your-worker.workers.dev">
+                    <small style="color:var(--text-secondary);display:block;margin-top:0.25rem;">Your Cloudflare Worker URL</small>
+                </div>
+                <div class="form-group" style="margin-bottom:1rem;">
+                    <label>Device Key</label>
+                    <input type="text" name="cloud_device_key" value="{escape_html(config.get('cloud', {}).get('device_key', ''))}" placeholder="mf_xxxxxxxxxxxx" style="font-family:monospace;">
+                    <small style="color:var(--text-secondary);display:block;margin-top:0.25rem;">Get this from your cloud dashboard after registering this device</small>
+                </div>
+                <button type="submit">Save Cloud Settings</button>
+            </form>
+        </div>
+    </div>
     </div>
 
     <!-- Watchdog Panel -->
@@ -7885,12 +7915,13 @@ def render_update_section(config):
 
 def render_status_dashboard(config):
     """Render a modern status dashboard with server health, Pi info, and alerts."""
-    global server_logger, SERVER_START_TIME, server_alerts
-    
+    global server_logger, SERVER_START_TIME, server_alerts, cloud_agent
+
     sys_info = get_system_info()
     stats = server_logger.get_stats()
     alert_stats = server_alerts.get_stats()
     net_diag = get_network_diagnostics()
+    cloud_status = cloud_agent.get_status()
     
     # Calculate uptime
     uptime_str = sys_info.get('server_uptime', '0h 0m 0s')
@@ -8113,6 +8144,12 @@ def render_status_dashboard(config):
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <span style="color:var(--text-secondary);font-size:0.85rem;">mDNS</span>
                     <span style="font-weight:500;">{"✓ Active" if sys_info.get('mdns_running') else "✗ Off"}</span>
+                </div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:0.5rem;padding:0.75rem 1rem;border:1px solid var(--border);">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="color:var(--text-secondary);font-size:0.85rem;">☁️ Cloud</span>
+                    <span style="font-weight:500;color:{'#22c55e' if cloud_status.get('connected') else '#f59e0b' if cloud_status.get('enabled') else 'var(--text-secondary)'};">{"✓ Connected" if cloud_status.get('connected') else "⋯ Connecting" if cloud_status.get('enabled') else "✗ Off"}</span>
                 </div>
             </div>
         </div>
@@ -9814,7 +9851,34 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 
                 save_config(config)
                 self.send_html(render_admin_page(user, config, message="Fallback settings saved"))
-        
+
+        elif path == '/admin/settings/cloud':
+            global cloud_agent
+            config.setdefault("cloud", {})
+
+            cloud_enabled = data.get('cloud_enabled') == '1'
+            cloud_url = data.get('cloud_url', '').strip().rstrip('/')
+            device_key = data.get('cloud_device_key', '').strip()
+
+            # Update config
+            config["cloud"]["enabled"] = cloud_enabled
+            config["cloud"]["url"] = cloud_url
+            config["cloud"]["device_key"] = device_key
+
+            save_config(config)
+
+            # Update cloud agent
+            if cloud_enabled and cloud_url and device_key:
+                cloud_agent.enabled = True
+                cloud_agent.cloud_url = cloud_url
+                cloud_agent.device_key = device_key
+                cloud_agent.start()
+                self.send_html(render_admin_page(user, config, message="Cloud sync enabled and started"))
+            else:
+                cloud_agent.stop()
+                cloud_agent.enabled = False
+                self.send_html(render_admin_page(user, config, message="Cloud settings saved"))
+
         elif path == '/admin/widget/add':
             name = data.get('name', '').strip()
             wtype = data.get('type', 'text')

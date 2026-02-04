@@ -5,6 +5,23 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-02-04
+
+### Added
+- **Cloud Settings in Admin Panel**: Configure cloud connectivity from the Settings tab
+  - Cloud URL field for Cloudflare Worker endpoint
+  - Device Key field for device authentication
+  - Enable/disable toggle for cloud sync
+  - Live status indicator (Connected/Connecting/Off)
+- **Cloud Status Indicator**: Shows real-time cloud connection status in admin dashboard
+  - Green checkmark when connected
+  - Orange dots when connecting
+  - Gray X when disabled
+
+### Changed
+- Admin status dashboard now includes cloud connectivity status
+- Cloud agent automatically starts/stops based on settings
+
 ## [1.2.0] - 2026-02-03
 
 ### Added

@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.2.0-2026--02--03-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.2.1-2026--02--04-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -25,7 +25,7 @@ Built for home dashboards, kiosks, and digital signage
 
 <br>
 
-[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v120) • [Documentation](#-configuration)
+[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v121) • [Documentation](#-configuration)
 
 </div>
 
@@ -239,19 +239,18 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.2.0
+## 🆕 What's New in v1.2.1
 
 <table>
 <tr>
 <td>
 
-### ☁️ Cloud Remote Management
+### ☁️ Cloud Settings in Admin
 
-- Manage 50+ devices from anywhere
-- Google Workspace authentication
-- Real-time status monitoring
-- Full config sync across devices
-- Cloudflare Workers backend (free tier)
+- Cloud URL and Device Key settings
+- Enable/disable cloud sync toggle
+- Live connection status indicator
+- Easy setup from Settings tab
 
 </td>
 <td>
@@ -524,6 +523,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.2.1** | 2026-02-04 | Cloud settings in admin panel, connection status indicator |
 | **1.2.0** | 2026-02-03 | Modern cloud dashboard, branding customization, responsive UI |
 | **1.1.15** | 2026-02-03 | Cloud remote management, Google Workspace auth, config sync |
 | **1.1.14** | 2026-02-03 | Simplified connectivity test, status icon toggle, bug fixes |

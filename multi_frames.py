@@ -28,6 +28,11 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.2.4 (2026-02-05)
+        - Added CLAUDE.md for AI assistant context
+        - Added ARCHITECTURE.md system architecture documentation
+        - Added CODEBASE.md detailed code documentation
+
     v1.2.3 (2026-02-04)
         - Simplified connectivity test to basic ping check
         - Server returns reachable: true/false for URL tests
@@ -197,8 +202,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.2.3"
-VERSION_DATE = "2026-02-04"
+VERSION = "1.2.4"
+VERSION_DATE = "2026-02-05"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -1708,7 +1713,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.2.3 by LTS, Inc.",
+            "text": "Multi-Frames v1.2.4 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -3993,7 +3998,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.2.3 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.2.4 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -6279,7 +6284,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.2.3 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.2.4 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -9935,7 +9940,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.2.3 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.2.4 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         

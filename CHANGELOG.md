@@ -5,6 +5,25 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.4] - 2026-02-05
+
+### Added
+- **CLAUDE.md**: Project context document for AI assistants
+  - Development guidelines and common patterns
+  - API endpoint reference
+  - Troubleshooting guide
+- **ARCHITECTURE.md**: Comprehensive system architecture documentation
+  - Component diagrams (local server, cloud backend)
+  - Data flow diagrams (auth, sync, connectivity)
+  - Security architecture
+  - Deployment architecture (Raspberry Pi)
+- **CODEBASE.md**: Detailed code documentation
+  - Module-by-module function reference
+  - Configuration schema
+  - API reference with request/response examples
+  - HTML templates and CSS classes
+  - JavaScript function reference
+
 ## [1.2.3] - 2026-02-04
 
 ### Changed

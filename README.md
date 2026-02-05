@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.2.3-2026--02--04-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.2.4-2026--02--05-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -25,7 +25,7 @@ Built for home dashboards, kiosks, and digital signage
 
 <br>
 
-[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v123) • [Documentation](#-configuration)
+[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v124) • [Documentation](#-configuration)
 
 </div>
 
@@ -239,26 +239,26 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.2.3
+## 🆕 What's New in v1.2.4
 
 <table>
 <tr>
 <td>
 
-### 🔧 Simplified Connectivity Test
+### 📚 Documentation
 
-- Basic ping check for URL reachability
-- Server returns simple true/false status
-- Any HTTP response = reachable (even 4xx/5xx)
-- Network errors only = not reachable
+- CLAUDE.md for AI assistant context
+- ARCHITECTURE.md system documentation
+- CODEBASE.md detailed code reference
+- Complete API and schema docs
 
 </td>
 <td>
 
-### ☁️ Cloud Connectivity
+### 🔧 Connectivity & Cloud
 
-- Fixed 403 error with Cloudflare
-- Added proper User-Agent headers
+- Simplified ping-based connectivity test
+- Fixed Cloudflare 403 with User-Agent
 - Cloud status indicator on admin
 - Settings in Admin → Settings tab
 
@@ -522,6 +522,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.2.4** | 2026-02-05 | Documentation: CLAUDE.md, ARCHITECTURE.md, CODEBASE.md |
 | **1.2.3** | 2026-02-04 | Simplified connectivity test to basic ping check |
 | **1.2.2** | 2026-02-04 | Improved connectivity test accuracy, fixed false negatives |
 | **1.2.1** | 2026-02-04 | Cloud settings in admin panel, connection status indicator |

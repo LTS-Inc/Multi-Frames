@@ -6,8 +6,8 @@ A lightweight, zero-dependency Python web server for displaying
 configurable iFrames and dashboard widgets.
 """
 
-__version__ = "1.2.3"
-__version_date__ = "2026-02-04"
+__version__ = "1.2.4"
+__version_date__ = "2026-02-05"
 __author__ = "Marco Longoria"
 __company__ = "LTS, Inc."
 __name__ = "Multi-Frames"

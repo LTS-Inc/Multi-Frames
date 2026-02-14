@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.2.7-2026--02--14-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.2.8-2026--02--14-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -25,7 +25,7 @@ Built for home dashboards, kiosks, and digital signage
 
 <br>
 
-[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v126) • [Documentation](#-configuration)
+[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v128) • [Documentation](#-configuration)
 
 </div>
 
@@ -239,28 +239,27 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.2.7
+## 🆕 What's New in v1.2.8
 
 <table>
 <tr>
 <td>
 
-### 📦 Cloud Firmware Management
+### 🔒 Cloud Agent SSL Fix
 
-- Upload firmware to cloud portal
-- Deploy to devices individually or in bulk
-- Automatic validation, backup, and restart
-- Firmware status tracking per device
+- Fixed `CERTIFICATE_VERIFY_FAILED` error on devices without CA certificates
+- Smart SSL context with automatic fallback for Raspberry Pi and minimal installs
+- Applied to all CloudAgent HTTPS calls (heartbeat, config, firmware)
 
 </td>
 <td>
 
-### 🔄 Cloud Config Refresh
+### 📦 Cloud Firmware Management (v1.2.7)
 
-- Request devices to push their current config
-- View live device configuration in cloud portal
-- Refresh button on device cards and config modal
-- Auto-sync on next device heartbeat
+- Upload firmware to cloud portal
+- Deploy to devices individually or in bulk
+- Automatic validation, backup, and restart
+- Config refresh from cloud dashboard
 
 </td>
 </tr>
@@ -522,6 +521,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.2.8** | 2026-02-14 | Fix cloud agent SSL certificate verification error |
 | **1.2.7** | 2026-02-14 | Cloud firmware deployment and config refresh |
 | **1.2.6** | 2026-02-14 | Typography, layout, animation settings; Android icon support |
 | **1.2.5** | 2026-02-14 | Mobile optimization, password toggle, removed connectivity test |

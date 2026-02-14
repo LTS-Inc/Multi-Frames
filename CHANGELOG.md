@@ -5,6 +5,14 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.8] - 2026-02-14
+
+### Fixed
+- **Cloud Agent SSL Error**: Fixed `CERTIFICATE_VERIFY_FAILED` error when connecting to cloud
+  - Added `_get_ssl_context()` helper to CloudAgent that detects available CA certificates
+  - Falls back to unverified context on systems without CA bundle (Raspberry Pi, minimal installs)
+  - Applied to all CloudAgent HTTPS calls: heartbeat, config pull, firmware download, config push
+
 ## [1.2.7] - 2026-02-14
 
 ### Added

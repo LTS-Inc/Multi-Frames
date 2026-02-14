@@ -6,7 +6,8 @@ Manage multiple Multi-Frames installations remotely with a centralized cloud das
 
 - **Modern Dashboard**: Responsive design with Inter font and sidebar navigation
 - **Google Workspace Auth**: Secure login with your organization's Google accounts
-- **Config Sync**: Push configuration to 50+ devices simultaneously
+- **Config Sync**: Push/pull configuration to 50+ devices simultaneously
+- **Firmware Management**: Upload and deploy firmware updates to devices remotely
 - **Real-time Status**: Monitor device health, uptime, and temperature
 - **Branding Customization**: Company name, logo, colors, dark mode
 - **Mobile Friendly**: Hamburger menu and touch-optimized interface
@@ -160,7 +161,17 @@ id = "your-sessions-kv-id"
 | `/api/config/push` | POST | Device pushes config (device auth) |
 | `/api/config/{id}` | GET | Get device config (user auth) |
 | `/api/config/{id}` | PUT | Push config to device (user auth) |
+| `/api/config/{id}/request` | POST | Request device to push its config (user auth) |
 | `/api/config/bulk-push` | POST | Push config to multiple devices |
+
+### Firmware
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/firmware` | GET | Get firmware metadata (user auth) |
+| `/api/firmware/upload` | POST | Upload firmware file (user auth) |
+| `/api/firmware/download` | GET | Device downloads firmware (device auth) |
+| `/api/firmware/deploy` | POST | Queue firmware for devices (user auth) |
 
 ### Branding
 
@@ -189,8 +200,9 @@ POST /api/config/bulk-push
 
 Devices automatically:
 1. Send heartbeat every 60 seconds
-2. Check for config updates
-3. Pull and apply new configs when available
+2. Check for config updates and pull new configs when available
+3. Check for firmware updates and apply them (with automatic backup and restart)
+4. Push config to cloud when requested by an admin via "Refresh" button
 
 ### Customize Branding
 

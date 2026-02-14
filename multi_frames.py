@@ -811,6 +811,18 @@ class CloudAgent:
                 if result.get('config_update_available'):
                     self._pull_config()
 
+                # Check if firmware update available
+                if result.get('firmware_update_available'):
+                    fw_version = result.get('firmware_version', 'unknown')
+                    server_logger.info(f"Firmware update available: v{fw_version}")
+                    self._pull_firmware()
+
+                # Check if config was requested by admin
+                if result.get('config_requested'):
+                    server_logger.info("Config refresh requested by cloud admin")
+                    config = load_config()
+                    self.push_config(config)
+
         except Exception as e:
             self._connected = False
             self._last_error = str(e)
@@ -871,6 +883,65 @@ class CloudAgent:
 
         except Exception as e:
             server_logger.error(f"Failed to apply cloud config: {e}")
+
+    def _pull_firmware(self):
+        """Pull firmware from cloud and apply it."""
+        if not self.cloud_url or not self.device_key:
+            return
+
+        import urllib.request
+        import json
+
+        try:
+            req = urllib.request.Request(
+                f"{self.cloud_url}/api/firmware/download",
+                headers={
+                    'X-Device-Key': self.device_key,
+                    'User-Agent': f'Multi-Frames/{VERSION}'
+                },
+                method='GET'
+            )
+
+            with urllib.request.urlopen(req, timeout=60) as response:
+                result = json.loads(response.read().decode('utf-8'))
+
+                if result.get('content'):
+                    self._apply_firmware(result['content'], result.get('version', 'unknown'))
+
+        except Exception as e:
+            server_logger.error(f"Cloud firmware download failed: {e}")
+
+    def _apply_firmware(self, firmware_content, version):
+        """Validate and apply firmware received from cloud."""
+        try:
+            # Validate the firmware
+            is_valid, validation_result = validate_firmware_file(firmware_content)
+            if not is_valid:
+                server_logger.error(f"Cloud firmware validation failed: {validation_result}")
+                return
+
+            # Create backup of current firmware
+            backup_path = create_firmware_backup()
+            server_logger.info(f"Created firmware backup before cloud update: {backup_path}")
+
+            # Write new firmware to current script location
+            current_script = os.path.abspath(__file__)
+            with open(current_script, 'w', encoding='utf-8') as f:
+                f.write(firmware_content)
+
+            server_logger.info(f"Cloud firmware v{version} applied successfully. Restarting...")
+
+            # Restart the server
+            import sys
+            import subprocess
+            subprocess.Popen(
+                [sys.executable, current_script] + sys.argv[1:],
+                start_new_session=True
+            )
+            os._exit(0)
+
+        except Exception as e:
+            server_logger.error(f"Failed to apply cloud firmware: {e}")
 
     def push_config(self, config):
         """Push current config to cloud."""

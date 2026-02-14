@@ -7,7 +7,7 @@ This document provides context for AI assistants working on the Multi-Frames cod
 **Multi-Frames** is a zero-dependency Python web server for displaying configurable iFrames and dashboard widgets. Designed for home dashboards, kiosks, digital signage, and Raspberry Pi deployments.
 
 - **Author**: Marco Longoria, LTS, Inc.
-- **Version**: 1.2.4
+- **Version**: 1.2.5
 - **License**: MIT
 - **Python**: 3.6+
 
@@ -150,7 +150,6 @@ python -m multi_frames --port 8080
 |----------|--------|-------------|
 | `/admin` | GET | Admin panel |
 | `/help` | GET | Help/diagnostics |
-| `/api/connectivity-test-url` | POST | Test URL reachability |
 | `/api/send-command` | POST | Send network command |
 
 ### Admin Only
@@ -189,13 +188,12 @@ Currently no automated tests. Manual testing workflow:
 3. Update `save_config()` call
 4. Add to default config if needed
 
-### Modifying Connectivity Test
+### Help Page
 
-The connectivity test is simple:
-- Server makes HEAD request to URL
-- Returns `{reachable: true}` if any HTTP response
-- Returns `{reachable: false}` on network error
-- Frontend displays green/red status dot
+The help/diagnostics page is admin-only and includes:
+- iframe connectivity tests (iframe-based load detection)
+- Device information detection
+- Server status and diagnostics
 
 ## Troubleshooting
 
@@ -226,4 +224,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.2.4** (2026-02-05)
+Current: **v1.2.5** (2026-02-14)

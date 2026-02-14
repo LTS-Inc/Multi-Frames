@@ -28,6 +28,13 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.2.5 (2026-02-14)
+        - Removed connectivity test from dashboard
+        - Help page restricted to admin users only
+        - Mobile-optimized layout and touch targets
+        - Password visibility toggle on login
+        - Comprehensive mobile CSS improvements
+
     v1.2.4 (2026-02-05)
         - Added CLAUDE.md for AI assistant context
         - Added ARCHITECTURE.md system architecture documentation
@@ -202,8 +209,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.2.4"
-VERSION_DATE = "2026-02-05"
+VERSION = "1.2.5"
+VERSION_DATE = "2026-02-14"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -1713,7 +1720,7 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.2.4 by LTS, Inc.",
+            "text": "Multi-Frames v1.2.5 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
         },
@@ -2834,6 +2841,35 @@ input[type="color"] {
     cursor: pointer;
 }
 
+/* Password toggle */
+.password-wrapper {
+    position: relative;
+}
+
+.password-wrapper input {
+    padding-right: 3rem;
+}
+
+.password-toggle {
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0.4rem;
+    font-size: 0.85rem;
+    width: auto;
+    min-height: auto;
+    line-height: 1;
+}
+
+.password-toggle:hover {
+    color: var(--text-primary);
+}
+
 textarea {
     min-height: 80px;
     resize: vertical;
@@ -2890,7 +2926,11 @@ button:hover, .btn:hover {
     grid-template-columns: repeat(var(--cols, 2), 1fr);
 }
 
-@media (max-width: 900px) { .iframe-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+    .iframe-grid { grid-template-columns: 1fr; }
+    .iframe-card iframe { min-height: 250px; }
+    .iframe-card h3 { padding: 0.6rem 0.75rem; font-size: 0.8rem; }
+}
 
 .iframe-card {
     background: var(--bg-secondary);
@@ -2922,36 +2962,6 @@ button:hover, .btn:hover {
     font-size: 0.75rem;
 }
 
-.status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #888;
-    flex-shrink: 0;
-    transition: background 0.3s;
-}
-
-.status-dot.loading {
-    background: #f59e0b;
-    animation: pulse 1s ease-in-out infinite;
-}
-
-.status-dot.connected {
-    background: #22c55e;
-}
-
-.status-dot.error {
-    background: #ef4444;
-}
-
-.status-dot.warning {
-    background: #f59e0b;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-}
 
 .iframe-card iframe {
     width: 100%;
@@ -3584,41 +3594,79 @@ footer a:hover {
     html {
         font-size: 14px;
     }
-    
+
     .container {
         padding: 0 0.75rem;
     }
-    
+
+    header .container {
+        padding: 0.5rem 0.75rem;
+    }
+
     header .logo span:not(:first-child) {
         display: none;
     }
-    
+
+    header .logo img {
+        max-height: 24px;
+    }
+
+    header nav a {
+        padding: 0.4rem 0.5rem;
+        font-size: 0.75rem;
+        min-height: 36px;
+    }
+
     .card {
         padding: 1.25rem;
         margin: 1.5rem 0.5rem;
         border-radius: 0.5rem;
     }
-    
+
+    .card h2 {
+        font-size: 1.25rem;
+    }
+
     .widgets-container {
         grid-template-columns: 1fr;
     }
-    
+
     .color-grid {
         grid-template-columns: 1fr;
     }
-    
+
     /* Stack all form buttons */
     form button, form .btn {
         width: 100%;
     }
-    
+
     /* Admin tabs - icon only */
     .admin-tab {
         padding: 0.75rem;
     }
-    
+
     .admin-tab-icon {
         font-size: 1.2rem;
+    }
+
+    /* iFrame cards on small screens */
+    .iframe-grid {
+        gap: 0.75rem;
+    }
+
+    .iframe-card h3 {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.75rem;
+    }
+
+    .iframe-card h3 span {
+        font-size: 0.65rem;
+    }
+
+    /* Footer on small screens */
+    footer {
+        padding: 1rem 0.75rem;
+        font-size: 0.65rem;
     }
 }
 
@@ -3952,7 +4000,7 @@ def render_page(title, content, user=None, config=None):
         nav_items = ""
         if is_admin:
             nav_items += '<a href="/admin">Admin</a>'
-        nav_items += '<a href="/help" title="Help & Diagnostics" style="width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-weight:600;">?</a>'
+            nav_items += '<a href="/help" title="Help & Diagnostics" style="width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-weight:600;">?</a>'
         nav_items += '<a href="/logout">Logout</a>'
     else:
         nav_items = '<a href="/login">Login</a>'
@@ -3998,7 +4046,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.2.4 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.2.5 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -4075,7 +4123,10 @@ def render_login_page(error=None, message=None):
             </div>
             <div class="form-group">
                 <label for="password">Password</label>
-                <input type="password" id="password" name="password" required autocomplete="current-password">
+                <div class="password-wrapper">
+                    <input type="password" id="password" name="password" required autocomplete="current-password">
+                    <button type="button" class="password-toggle" onclick="var p=document.getElementById('password');if(p.type==='password'){{p.type='text';this.textContent='Hide';}}else{{p.type='password';this.textContent='Show';}}">Show</button>
+                </div>
             </div>
             <button type="submit" style="width:100%;margin-top:0.5rem;">Login</button>
         </form>
@@ -4391,44 +4442,7 @@ def render_help_page(user, config):
         if (timeCell) timeCell.textContent = '...';
 
         var startTime = performance.now();
-
-        // Simple ping test - server checks if URL is reachable
-        fetch(apiBase + '/api/connectivity-test-url', {{
-            method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: JSON.stringify({{ url: url, index: idx }})
-        }})
-        .then(function(response) {{ return response.json(); }})
-        .then(function(data) {{
-            var elapsed = Math.round(performance.now() - startTime);
-            var result = data.result || {{}};
-            var isSuccess = result.reachable === true;
-
-            // Update UI
-            dot.className = 'status-dot ' + (isSuccess ? 'connected' : 'error');
-            dot.textContent = isSuccess ? '✓' : '✗';
-
-            if (timeCell) {{
-                if (isSuccess) {{
-                    var cls = elapsed < 1000 ? 'good' : (elapsed < 3000 ? 'warning' : 'error');
-                    timeCell.innerHTML = '<span class="test-metric ' + cls + '">' + elapsed + ' ms</span>';
-                }} else {{
-                    timeCell.innerHTML = '<span class="test-metric error">Failed</span>';
-                }}
-            }}
-
-            helpTestResults[idx] = {{
-                success: isSuccess,
-                time: elapsed,
-                name: name || 'Unknown'
-            }};
-
-            checkForFailures();
-        }})
-        .catch(function(err) {{
-            // Fallback: if server test fails, use iframe-based test
-            helpTestUrlFallback(idx, url, name, startTime);
-        }});
+        helpTestUrlFallback(idx, url, name, startTime);
     }}
 
     function helpTestUrlFallback(idx, url, name, startTime) {{
@@ -5316,10 +5330,9 @@ def render_main_page(user, config):
             iframe_style_str = ';'.join(iframe_styles)
             wrapper_style_str = ';'.join(wrapper_styles) if wrapper_styles else ''
             
-            # Header visibility with optional status dot
+            # Header visibility
             if show_header:
-                status_dot_html = f'<span class="status-dot {"connected" if use_embed_code else "loading"}" id="status-{i}" title="{"Embed Code" if use_embed_code else "Connecting..."}"></span>' if show_status else ''
-                header_html = f'<h3><span class="title-left">{status_dot_html}{display_title}</span> {url_display}</h3>'
+                header_html = f'<h3><span class="title-left">{display_title}</span> {url_display}</h3>'
             else:
                 header_html = ''
                 if 'border-radius' not in card_style_str:
@@ -5377,41 +5390,9 @@ def render_main_page(user, config):
             </div>
             """
         
-        # Add status monitoring script
-        # Fallback configuration for JavaScript
-        fallback_js = ""
-        if fallback_enabled and fallback_image:
-            fallback_js = f"""
-            var fallbackConfig = {{
-                enabled: true,
-                image: 'data:{fallback_mime};base64,{fallback_image}',
-                text: '{fallback_text}'
-            }};
-            """
-        else:
-            fallback_js = """
-            var fallbackConfig = { enabled: false };
-            """
-
-        # Build iframe URL list for connectivity testing
-        iframe_test_data = []
-        for i, iframe in enumerate(iframes):
-            if not iframe.get("use_embed_code", False) and iframe.get("url"):
-                iframe_test_data.append({
-                    "index": i,
-                    "url": iframe.get("url", "")
-                })
-
-        import json as json_module
-        iframe_test_json = json_module.dumps(iframe_test_data)
-
+        # Add page scripts (back button fix)
         status_script = f"""
         <script>
-        {fallback_js}
-
-        var iframeTestData = {iframe_test_json};
-        var apiBase = window.location.origin;
-
         // Prevent back button issues with iframes
         (function() {{
             if (document.querySelectorAll('iframe').length > 0) {{
@@ -5425,67 +5406,6 @@ def render_main_page(user, config):
                 }});
             }}
         }})();
-
-        function showFallback(index) {{
-            if (!fallbackConfig.enabled) return;
-            var iframe = document.getElementById('iframe-' + index);
-            var fallback = document.getElementById('fallback-' + index);
-            if (iframe && fallback) {{
-                iframe.style.display = 'none';
-                if (iframe.parentElement) iframe.parentElement.style.display = 'none';
-                fallback.style.display = 'flex';
-                fallback.innerHTML = '<div class="fallback-content">' +
-                    (fallbackConfig.image ? '<img src="' + fallbackConfig.image + '" alt="Fallback">' : '') +
-                    '<span class="fallback-text">' + fallbackConfig.text + '</span></div>';
-            }}
-        }}
-
-        function hideFallback(index) {{
-            var iframe = document.getElementById('iframe-' + index);
-            var fallback = document.getElementById('fallback-' + index);
-            if (iframe && fallback) {{
-                iframe.style.display = '';
-                if (iframe.parentElement && iframe.parentElement.classList.contains('iframe-wrapper')) {{
-                    iframe.parentElement.style.display = '';
-                }}
-                fallback.style.display = 'none';
-            }}
-        }}
-
-        function setStatus(index, reachable) {{
-            var dot = document.getElementById('status-' + index);
-            if (dot) {{
-                dot.classList.remove('loading', 'connected', 'error');
-                dot.classList.add(reachable ? 'connected' : 'error');
-                dot.title = reachable ? 'Reachable' : 'Unreachable';
-                if (reachable) hideFallback(index); else showFallback(index);
-            }}
-        }}
-
-        function pingUrl(index, url) {{
-            var dot = document.getElementById('status-' + index);
-            if (dot) {{ dot.classList.add('loading'); dot.title = 'Testing...'; }}
-
-            fetch(apiBase + '/api/connectivity-test-url', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ url: url, index: index }})
-            }})
-            .then(function(r) {{ return r.json(); }})
-            .then(function(data) {{
-                setStatus(index, data.result && data.result.reachable === true);
-            }})
-            .catch(function() {{ setStatus(index, false); }});
-        }}
-
-        function testAll() {{
-            iframeTestData.forEach(function(item, i) {{
-                setTimeout(function() {{ pingUrl(item.index, item.url); }}, i * 100);
-            }});
-        }}
-
-        window.addEventListener('load', testAll);
-        setInterval(testAll, 60000);
         </script>
         """
 
@@ -6284,7 +6204,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.2.4 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.2.5 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -9302,52 +9222,6 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 server_logger.error(f"Connectivity report error: {str(e)}")
                 self.send_json({'success': False, 'error': str(e)})
 
-        elif path == '/api/connectivity-test-url':
-            # Simple ping test: can we reach the URL?
-            # Returns reachable: true if server responds (any HTTP status)
-            # Returns reachable: false if network error (timeout, refused, DNS fail)
-            if not user:
-                self.send_json({'success': False, 'error': 'Authentication required'}, 401)
-                return
-
-            import urllib.request
-            import urllib.error
-            import ssl
-            import socket
-
-            url = data.get('url', '')
-            idx = data.get('index', 0)
-
-            if not url:
-                self.send_json({'success': False, 'error': 'No URL provided'})
-                return
-
-            # Create SSL context that doesn't verify certificates
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-
-            reachable = False
-
-            try:
-                req = urllib.request.Request(url, method='HEAD', headers={
-                    'User-Agent': 'Mozilla/5.0 (compatible; Multi-Frames)',
-                    'Connection': 'close'
-                })
-                with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
-                    reachable = True  # Got a response
-            except urllib.error.HTTPError:
-                # HTTP 4xx/5xx still means server is reachable
-                reachable = True
-            except:
-                # Any other error means not reachable
-                reachable = False
-
-            self.send_json({
-                'success': True,
-                'result': {'index': idx, 'reachable': reachable}
-            })
-
         elif not user:
             self.redirect('/login')
         
@@ -9940,7 +9814,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.2.4 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.2.5 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
         

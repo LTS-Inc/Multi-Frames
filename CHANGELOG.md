@@ -5,6 +5,27 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.5] - 2026-02-14
+
+### Removed
+- **Connectivity Test**: Removed server-side ping test and status dots from dashboard
+  - Removed `/api/connectivity-test-url` endpoint
+  - Removed status dot indicators from iframe cards
+  - Removed connectivity test CSS (status-dot classes)
+  - Help page test now uses iframe-based approach
+- **Help Page for Users**: Help/diagnostics page now restricted to admin users only
+
+### Added
+- **Password Visibility Toggle**: Show/hide button on login password field
+  - Toggle button displays "Show"/"Hide" text
+  - Styled to match existing form design
+- **Mobile Optimizations**: Improved responsive layout for small screens
+  - Better header layout on phones (smaller logo, compact nav)
+  - Responsive iframe cards with adjusted padding and font sizes
+  - Optimized footer spacing on mobile
+  - Better touch target sizes (min 36px on extra small screens)
+  - Improved card heading sizes for 480px screens
+
 ## [1.2.4] - 2026-02-05
 
 ### Added

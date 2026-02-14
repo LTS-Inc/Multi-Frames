@@ -190,33 +190,29 @@ Cloudflare Worker providing centralized management.
       │  locally         │                   │
 ```
 
-### 3. Connectivity Test Flow
+### 3. Network Command Flow
 
 ```
 ┌────────┐     ┌────────────┐     ┌────────────┐
 │Browser │     │Multi-Frames│     │  Target    │
-│        │     │  Server    │     │   URL      │
+│        │     │  Server    │     │  Device    │
 └───┬────┘     └─────┬──────┘     └─────┬──────┘
     │                │                   │
     │  POST /api/    │                   │
-    │  connectivity  │                   │
-    │  -test-url     │                   │
-    │  {url: "..."}  │                   │
+    │  send-command  │                   │
+    │  {host, port,  │                   │
+    │   command}     │                   │
     │───────────────>│                   │
     │                │                   │
-    │                │  HEAD request     │
+    │                │  TCP/UDP/Telnet   │
     │                │──────────────────>│
     │                │                   │
-    │                │  HTTP response    │
-    │                │  (any status)     │
+    │                │  Response         │
     │                │<──────────────────│
     │                │                   │
-    │  {reachable:   │                   │
+    │  {success:     │                   │
     │   true}        │                   │
     │<───────────────│                   │
-    │                │                   │
-    │  Update UI     │                   │
-    │  (green dot)   │                   │
 ```
 
 ## Module Architecture

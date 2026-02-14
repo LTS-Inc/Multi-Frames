@@ -24,7 +24,7 @@ The main server file (~10,000 lines) contains all functionality in a single depl
 ### Constants (Lines 196-200)
 
 ```python
-VERSION = "1.2.4"           # Current version
+VERSION = "1.2.5"           # Current version
 VERSION_DATE = "2026-02-05" # Release date
 DEFAULT_PORT = 8080         # Default HTTP port
 DEFAULT_HOST = "0.0.0.0"    # Listen on all interfaces
@@ -110,7 +110,6 @@ Main HTTP request handler extending `SimpleHTTPRequestHandler`.
 | Path | Auth | Description |
 |------|------|-------------|
 | `/login` | No | Process login |
-| `/api/connectivity-test-url` | Yes | Test URL reachability |
 | `/api/send-command` | Yes | Send network command |
 | `/admin/iframe/*` | Admin | Manage iFrames |
 | `/admin/widget/*` | Admin | Manage widgets |
@@ -195,7 +194,7 @@ def escape_html(text):
 Package metadata and version information.
 
 ```python
-__version__ = "1.2.4"
+__version__ = "1.2.5"
 __author__ = "Marco Longoria"
 __company__ = "LTS, Inc."
 ```
@@ -466,7 +465,7 @@ router.get('/', serveDashboard);
   "last_seen": "2026-02-05T14:22:00Z",
   "status": "online",  // online, offline, unknown
   "info": {
-    "version": "1.2.4",
+    "version": "1.2.5",
     "ip": "192.168.1.100",
     "hostname": "raspberrypi",
     "temperature": 45.2,
@@ -536,7 +535,7 @@ router.get('/', serveDashboard);
     },
     "footer": {
       "enabled": true,
-      "text": "Multi-Frames v1.2.4 by LTS, Inc."
+      "text": "Multi-Frames v1.2.5 by LTS, Inc."
     },
     "theme": "dark",
     "background_color": "#1a1a2e",
@@ -663,29 +662,6 @@ Redirect: /login?error=1
 ```
 
 ### Authenticated Endpoints
-
-#### POST /api/connectivity-test-url
-
-Test if a URL is reachable.
-
-**Request:**
-```json
-{
-  "url": "http://example.com",
-  "index": 0
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "result": {
-    "index": 0,
-    "reachable": true
-  }
-}
-```
 
 #### POST /api/send-command
 
@@ -860,29 +836,10 @@ Update cloud settings.
 ### Dashboard (Main Page)
 
 ```javascript
-// Connectivity testing
-function pingUrl(index, url) {
-    // POST to /api/connectivity-test-url
-    // Update status dot based on result
-}
-
-function setStatus(index, reachable) {
-    // Update status dot class and title
-    // Show/hide fallback content
-}
-
-function testAll() {
-    // Test all iFrames with staggered timing
-}
-
-// Fallback handling
-function showFallback(index) {
-    // Show fallback content when iframe fails
-}
-
-function hideFallback(index) {
-    // Hide fallback when iframe loads
-}
+// Back button prevention for iframes
+(function() {
+    // Prevents iframe navigation from hijacking browser back button
+})();
 ```
 
 ### Admin Panel

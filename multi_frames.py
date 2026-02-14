@@ -28,6 +28,13 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.2.6 (2026-02-14)
+        - Added Typography settings (font family, size, heading weight)
+        - Added Layout settings (border radius, iframe gap, padding)
+        - Added Animation settings (enable/disable, speed)
+        - Added Android home screen icon support
+        - Empty text fields now allowed for all customization options
+
     v1.2.5 (2026-02-14)
         - Removed connectivity test from dashboard
         - Help page restricted to admin users only
@@ -209,7 +216,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.2.5"
+VERSION = "1.2.6"
 VERSION_DATE = "2026-02-14"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -1686,7 +1693,9 @@ DEFAULT_CONFIG = {
         "favicon": None,  # Base64 encoded favicon
         "favicon_mime": None,
         "apple_touch_icon": None,  # Base64 encoded apple touch icon
-        "apple_touch_icon_mime": None
+        "apple_touch_icon_mime": None,
+        "android_icon": None,  # Base64 encoded android icon (192x192)
+        "android_icon_mime": None
     },
     "appearance": {
         "colors": {
@@ -1720,9 +1729,23 @@ DEFAULT_CONFIG = {
         },
         "footer": {
             "show": True,
-            "text": "Multi-Frames v1.2.5 by LTS, Inc.",
+            "text": "Multi-Frames v1.2.6 by LTS, Inc.",
             "show_python_version": True,
             "links": []  # List of {"label": "...", "url": "..."}
+        },
+        "typography": {
+            "font_family": "system",  # system, inter, roboto, monospace
+            "base_font_size": 16,  # 12-24px
+            "heading_weight": "600"  # 400, 500, 600, 700
+        },
+        "layout": {
+            "border_radius": 8,  # 0-20px
+            "iframe_gap": 16,  # 8-32px
+            "content_padding": 16  # 8-32px
+        },
+        "animations": {
+            "enabled": True,
+            "transition_speed": "normal"  # slow, normal, fast
         },
         "custom_css": ""
     },
@@ -3721,10 +3744,34 @@ def generate_dynamic_styles(config):
     colors = appearance.get("colors", {})
     bg = appearance.get("background", {})
     header = appearance.get("header", {})
-    
+    typography = appearance.get("typography", {})
+    layout = appearance.get("layout", {})
+    animations = appearance.get("animations", {})
+
     # Default colors
     defaults = DEFAULT_CONFIG["appearance"]["colors"]
-    
+
+    # Typography settings
+    font_family_map = {
+        "system": "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif",
+        "inter": "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+        "roboto": "'Roboto', -apple-system, BlinkMacSystemFont, sans-serif",
+        "monospace": "'SF Mono', 'Consolas', 'Monaco', 'Courier New', monospace"
+    }
+    font_family = font_family_map.get(typography.get("font_family", "system"), font_family_map["system"])
+    base_font_size = max(12, min(24, int(typography.get("base_font_size", 16))))
+    heading_weight = typography.get("heading_weight", "600")
+
+    # Layout settings
+    border_radius = max(0, min(20, int(layout.get("border_radius", 8))))
+    iframe_gap = max(8, min(32, int(layout.get("iframe_gap", 16))))
+    content_padding = max(8, min(32, int(layout.get("content_padding", 16))))
+
+    # Animation settings
+    animations_enabled = animations.get("enabled", True)
+    transition_speed_map = {"slow": "0.4s", "normal": "0.2s", "fast": "0.1s"}
+    transition_speed = transition_speed_map.get(animations.get("transition_speed", "normal"), "0.2s")
+
     css_vars = f"""
     :root {{
         --bg-primary: {colors.get('bg_primary', defaults['bg_primary'])};
@@ -3737,9 +3784,34 @@ def generate_dynamic_styles(config):
         --accent-hover: {colors.get('accent_hover', defaults['accent_hover'])};
         --danger: {colors.get('danger', defaults['danger'])};
         --success: {colors.get('success', defaults['success'])};
-        --radius: 6px;
+        --radius: {border_radius}px;
         --header-bg: {header.get('bg_color') or colors.get('bg_secondary', defaults['bg_secondary'])};
         --header-text: {header.get('text_color') or colors.get('text_primary', defaults['text_primary'])};
+        --font-family: {font_family};
+        --base-font-size: {base_font_size}px;
+        --heading-weight: {heading_weight};
+        --iframe-gap: {iframe_gap}px;
+        --content-padding: {content_padding}px;
+        --transition-speed: {transition_speed if animations_enabled else '0s'};
+    }}
+
+    body {{
+        font-family: var(--font-family);
+        font-size: var(--base-font-size);
+    }}
+
+    h1, h2, h3, h4, h5, h6 {{
+        font-weight: var(--heading-weight);
+    }}
+
+    .grid {{
+        gap: var(--iframe-gap);
+        padding: var(--content-padding);
+    }}
+
+    .frame-container, .widget, .admin-section, .card {{
+        border-radius: var(--radius);
+        transition: all var(--transition-speed) ease;
     }}
     """
     
@@ -4024,7 +4096,13 @@ def render_page(title, content, user=None, config=None):
     apple_touch_icon_html = ""
     if branding.get("apple_touch_icon") and branding.get("apple_touch_icon_mime"):
         apple_touch_icon_html = f'<link rel="apple-touch-icon" href="data:{branding["apple_touch_icon_mime"]};base64,{branding["apple_touch_icon"]}">'
-    
+
+    # Build Android Icon HTML (for Android "Add to Home Screen")
+    android_icon_html = ""
+    if branding.get("android_icon") and branding.get("android_icon_mime"):
+        # Android uses a web manifest with icon reference
+        android_icon_html = f'<link rel="icon" sizes="192x192" href="data:{branding["android_icon_mime"]};base64,{branding["android_icon"]}">'
+
     # Header custom text
     header_subtitle = ""
     if header_cfg.get("custom_text"):
@@ -4046,7 +4124,7 @@ def render_page(title, content, user=None, config=None):
     # Footer HTML
     footer_html = ""
     if footer_cfg.get("show", True):
-        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.2.5 by LTS, Inc."))
+        footer_text = escape_html(footer_cfg.get("text", "Multi-Frames v1.2.6 by LTS, Inc."))
         if footer_cfg.get("show_python_version", True):
             footer_text += f" • Python {'.'.join(map(str, __import__('sys').version_info[:2]))}"
         
@@ -4095,6 +4173,7 @@ def render_page(title, content, user=None, config=None):
     <title>{full_tab_title}</title>
     {favicon_html}
     {apple_touch_icon_html}
+    {android_icon_html}
     <style>{dynamic_styles}{CSS_STYLES}</style>
 </head>
 <body>
@@ -5623,6 +5702,9 @@ def render_admin_page(user, config, message=None, error=None):
     bg = appearance.get("background", DEFAULT_CONFIG["appearance"]["background"])
     header_cfg = appearance.get("header", DEFAULT_CONFIG["appearance"]["header"])
     footer_cfg = appearance.get("footer", DEFAULT_CONFIG["appearance"]["footer"])
+    typography_cfg = appearance.get("typography", DEFAULT_CONFIG["appearance"]["typography"])
+    layout_cfg = appearance.get("layout", DEFAULT_CONFIG["appearance"]["layout"])
+    animations_cfg = appearance.get("animations", DEFAULT_CONFIG["appearance"]["animations"])
     
     # iFrames section
     iframes_list = ""
@@ -5924,7 +6006,20 @@ def render_admin_page(user, config, message=None, error=None):
         '''
     else:
         apple_touch_icon_preview = '<p style="color:var(--text-secondary);margin-bottom:1rem;">No icon uploaded. iOS will use a screenshot.</p>'
-    
+
+    # Android Icon preview (for Android Add to Home Screen)
+    android_icon_preview = ""
+    if branding.get("android_icon") and branding.get("android_icon_mime"):
+        android_icon_preview = f'''
+        <div class="preview-box" style="display:flex;align-items:center;gap:1rem;">
+            <img src="data:{branding["android_icon_mime"]};base64,{branding["android_icon"]}" style="height:60px;width:60px;object-fit:contain;" alt="Current Android Icon">
+            <div style="flex:1;"><strong>Current Icon</strong><small style="display:block;color:var(--text-secondary);">{branding.get("android_icon_mime", "unknown")}</small></div>
+            <form method="POST" action="/admin/branding/android-icon/delete" style="display:inline;"><button type="submit" class="btn btn-danger btn-sm">Remove</button></form>
+        </div>
+        '''
+    else:
+        android_icon_preview = '<p style="color:var(--text-secondary);margin-bottom:1rem;">No icon uploaded. Android will use the favicon.</p>'
+
     # Background preview
     bg_preview = ""
     if bg.get("type") == "image" and bg.get("image"):
@@ -6204,7 +6299,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/appearance/footer">
                     <div class="toggle-row"><label>Show Footer</label><select name="show" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show", True) else ""}>No</option></select></div>
                     <div class="toggle-row"><label>Show Python Version</label><select name="show_python_version" style="width:auto;"><option value="1" {"selected" if footer_cfg.get("show_python_version", True) else ""}>Yes</option><option value="0" {"selected" if not footer_cfg.get("show_python_version", True) else ""}>No</option></select></div>
-                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.2.5 by LTS, Inc.'))}" placeholder="Footer text"></div>
+                    <div class="form-group" style="margin-top:1rem;"><label>Footer Text</label><input type="text" name="text" value="{escape_html(footer_cfg.get('text', 'Multi-Frames v1.2.6 by LTS, Inc.'))}" placeholder="Footer text"></div>
                     <button type="submit">Save Footer</button>
                 </form>
                 
@@ -6215,7 +6310,85 @@ def render_admin_page(user, config, message=None, error=None):
             </div>
             
             <div class="admin-subsection">
-                <h4>✨ Custom CSS</h4>
+                <h4>🔤 Typography</h4>
+                <form method="POST" action="/admin/appearance/typography">
+                    <div class="inline-form">
+                        <div class="form-group">
+                            <label>Font Family</label>
+                            <select name="font_family">
+                                <option value="system" {"selected" if typography_cfg.get("font_family", "system") == "system" else ""}>System Default</option>
+                                <option value="inter" {"selected" if typography_cfg.get("font_family") == "inter" else ""}>Inter</option>
+                                <option value="roboto" {"selected" if typography_cfg.get("font_family") == "roboto" else ""}>Roboto</option>
+                                <option value="monospace" {"selected" if typography_cfg.get("font_family") == "monospace" else ""}>Monospace</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Base Font Size (px)</label>
+                            <input type="number" name="base_font_size" value="{typography_cfg.get('base_font_size', 16)}" min="12" max="24" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Heading Weight</label>
+                            <select name="heading_weight">
+                                <option value="400" {"selected" if typography_cfg.get("heading_weight") == "400" else ""}>Normal (400)</option>
+                                <option value="500" {"selected" if typography_cfg.get("heading_weight") == "500" else ""}>Medium (500)</option>
+                                <option value="600" {"selected" if typography_cfg.get("heading_weight", "600") == "600" else ""}>Semibold (600)</option>
+                                <option value="700" {"selected" if typography_cfg.get("heading_weight") == "700" else ""}>Bold (700)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button type="submit" style="margin-top:0.5rem;">Save Typography</button>
+                </form>
+            </div>
+
+            <div class="admin-subsection">
+                <h4>📐 Layout</h4>
+                <form method="POST" action="/admin/appearance/layout">
+                    <div class="inline-form">
+                        <div class="form-group">
+                            <label>Border Radius (px)</label>
+                            <input type="number" name="border_radius" value="{layout_cfg.get('border_radius', 8)}" min="0" max="20" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label>iFrame Gap (px)</label>
+                            <input type="number" name="iframe_gap" value="{layout_cfg.get('iframe_gap', 16)}" min="8" max="32" step="2">
+                        </div>
+                        <div class="form-group">
+                            <label>Content Padding (px)</label>
+                            <input type="number" name="content_padding" value="{layout_cfg.get('content_padding', 16)}" min="8" max="32" step="2">
+                        </div>
+                    </div>
+                    <small style="color:var(--text-secondary);display:block;margin-top:0.5rem;">Border radius affects cards, widgets, and buttons. Gap controls spacing between iFrames.</small>
+                    <button type="submit" style="margin-top:0.5rem;">Save Layout</button>
+                </form>
+            </div>
+
+            <div class="admin-subsection">
+                <h4>✨ Animations</h4>
+                <form method="POST" action="/admin/appearance/animations">
+                    <div class="inline-form">
+                        <div class="form-group">
+                            <label>Enable Animations</label>
+                            <select name="enabled">
+                                <option value="1" {"selected" if animations_cfg.get("enabled", True) else ""}>Yes</option>
+                                <option value="0" {"selected" if not animations_cfg.get("enabled", True) else ""}>No</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Transition Speed</label>
+                            <select name="transition_speed">
+                                <option value="slow" {"selected" if animations_cfg.get("transition_speed") == "slow" else ""}>Slow (0.4s)</option>
+                                <option value="normal" {"selected" if animations_cfg.get("transition_speed", "normal") == "normal" else ""}>Normal (0.2s)</option>
+                                <option value="fast" {"selected" if animations_cfg.get("transition_speed") == "fast" else ""}>Fast (0.1s)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <small style="color:var(--text-secondary);display:block;margin-top:0.5rem;">Disable animations for better performance on slower devices or for accessibility.</small>
+                    <button type="submit" style="margin-top:0.5rem;">Save Animations</button>
+                </form>
+            </div>
+
+            <div class="admin-subsection">
+                <h4>🎯 Custom CSS</h4>
                 <form method="POST" action="/admin/appearance/css">
                     <div class="form-group"><label>Additional CSS (Advanced)</label><textarea name="custom_css" rows="5" placeholder="/* Custom CSS */">{escape_html(appearance.get('custom_css', ''))}</textarea></div>
                     <button type="submit">Save CSS</button>
@@ -6249,10 +6422,17 @@ def render_admin_page(user, config, message=None, error=None):
                 </form>
                 <small style="color:var(--text-secondary);display:block;margin-top:0.8rem;">This icon appears when users tap "Add to Home Screen" on iPhone/iPad. Use a square PNG image (180x180px for best quality). iOS will automatically add rounded corners.</small>
             </div>
+            <div class="admin-subsection"><h4>🤖 Android Home Screen Icon</h4>{android_icon_preview}
+                <form method="POST" action="/admin/branding/android-icon" enctype="multipart/form-data" class="inline-form">
+                    <div class="form-group" style="flex:2;"><label>Upload Icon (PNG, 192x192px recommended, max 500KB)</label><input type="file" name="android_icon" accept="image/png" required style="padding:0.5rem;"></div>
+                    <button type="submit">Upload</button>
+                </form>
+                <small style="color:var(--text-secondary);display:block;margin-top:0.8rem;">This icon appears when users tap "Add to Home Screen" on Android devices. Use a square PNG image (192x192px for best quality).</small>
+            </div>
         </div>
     </div>
     </div>
-    
+
     <!-- Users Panel -->
     <div class="tab-panel" id="panel-users">
     <div class="admin-section">
@@ -9483,7 +9663,38 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_html(render_admin_page(user, config, message="iOS Home Screen icon removed"))
             else:
                 self.send_html(render_admin_page(user, config, error=err))
-        
+
+        elif path == '/admin/branding/android-icon':
+            if 'android_icon' not in files:
+                self.send_html(render_admin_page(user, config, error="No icon file uploaded"))
+            else:
+                file_info = files['android_icon']
+                file_data = file_info['data']
+                mime_type = file_info['content_type']
+
+                # Only allow PNG for android icon
+                if mime_type != 'image/png':
+                    self.send_html(render_admin_page(user, config, error="Android icon must be a PNG file"))
+                elif len(file_data) > MAX_LOGO_SIZE:
+                    self.send_html(render_admin_page(user, config, error=f"File too large. Maximum size: {MAX_LOGO_SIZE // 1024}KB"))
+                else:
+                    config.setdefault("branding", {})["android_icon"] = base64.b64encode(file_data).decode('ascii')
+                    config["branding"]["android_icon_mime"] = mime_type
+                    success, err = save_config(config)
+                    if success:
+                        self.send_html(render_admin_page(user, config, message="Android Home Screen icon uploaded successfully"))
+                    else:
+                        self.send_html(render_admin_page(user, config, error=err))
+
+        elif path == '/admin/branding/android-icon/delete':
+            config.setdefault("branding", {})["android_icon"] = None
+            config["branding"]["android_icon_mime"] = None
+            success, err = save_config(config)
+            if success:
+                self.send_html(render_admin_page(user, config, message="Android Home Screen icon removed"))
+            else:
+                self.send_html(render_admin_page(user, config, error=err))
+
         elif path == '/admin/user/add':
             username = data.get('username', '').strip()
             password = data.get('password', '')
@@ -9814,10 +10025,55 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config.setdefault("appearance", {}).setdefault("footer", {})
             config["appearance"]["footer"]["show"] = data.get('show') == '1'
             config["appearance"]["footer"]["show_python_version"] = data.get('show_python_version') == '1'
-            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.2.5 by LTS, Inc.').strip()[:100]
+            config["appearance"]["footer"]["text"] = data.get('text', 'Multi-Frames v1.2.6 by LTS, Inc.').strip()[:100]
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Footer settings saved"))
-        
+
+        elif path == '/admin/appearance/typography':
+            config.setdefault("appearance", {}).setdefault("typography", {})
+            font_family = data.get('font_family', 'system')
+            if font_family in ['system', 'inter', 'roboto', 'monospace']:
+                config["appearance"]["typography"]["font_family"] = font_family
+            try:
+                base_font_size = max(12, min(24, int(data.get('base_font_size', 16))))
+                config["appearance"]["typography"]["base_font_size"] = base_font_size
+            except (ValueError, TypeError):
+                pass
+            heading_weight = data.get('heading_weight', '600')
+            if heading_weight in ['400', '500', '600', '700']:
+                config["appearance"]["typography"]["heading_weight"] = heading_weight
+            save_config(config)
+            self.send_html(render_admin_page(user, config, message="Typography settings saved"))
+
+        elif path == '/admin/appearance/layout':
+            config.setdefault("appearance", {}).setdefault("layout", {})
+            try:
+                border_radius = max(0, min(20, int(data.get('border_radius', 8))))
+                config["appearance"]["layout"]["border_radius"] = border_radius
+            except (ValueError, TypeError):
+                pass
+            try:
+                iframe_gap = max(8, min(32, int(data.get('iframe_gap', 16))))
+                config["appearance"]["layout"]["iframe_gap"] = iframe_gap
+            except (ValueError, TypeError):
+                pass
+            try:
+                content_padding = max(8, min(32, int(data.get('content_padding', 16))))
+                config["appearance"]["layout"]["content_padding"] = content_padding
+            except (ValueError, TypeError):
+                pass
+            save_config(config)
+            self.send_html(render_admin_page(user, config, message="Layout settings saved"))
+
+        elif path == '/admin/appearance/animations':
+            config.setdefault("appearance", {}).setdefault("animations", {})
+            config["appearance"]["animations"]["enabled"] = data.get('enabled') == '1'
+            transition_speed = data.get('transition_speed', 'normal')
+            if transition_speed in ['slow', 'normal', 'fast']:
+                config["appearance"]["animations"]["transition_speed"] = transition_speed
+            save_config(config)
+            self.send_html(render_admin_page(user, config, message="Animation settings saved"))
+
         elif path == '/admin/footer-link/add':
             label = data.get('label', '').strip()[:50]
             url = data.get('url', '').strip()[:500]

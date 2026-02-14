@@ -758,6 +758,21 @@ class CloudAgent:
             self._thread.join(timeout=5)
         self._connected = False
 
+    def _get_ssl_context(self):
+        """Get SSL context for HTTPS connections, with fallback for missing CA certs."""
+        import ssl
+        try:
+            ctx = ssl.create_default_context()
+            # Verify that CA certificates are actually loaded
+            stats = ctx.cert_store_stats()
+            if stats.get('x509_ca', 0) > 0:
+                return ctx
+        except Exception:
+            pass
+        # Fallback: unverified context for systems without CA bundle
+        ctx = ssl._create_unverified_context()
+        return ctx
+
     def _run(self):
         """Background thread main loop."""
         while not self._stop_event.is_set():
@@ -807,7 +822,7 @@ class CloudAgent:
                 method='POST'
             )
 
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=10, context=self._get_ssl_context()) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 self._connected = True
                 self._last_heartbeat = datetime.now()
@@ -856,7 +871,7 @@ class CloudAgent:
                 method='GET'
             )
 
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=10, context=self._get_ssl_context()) as response:
                 result = json.loads(response.read().decode('utf-8'))
 
                 if result.get('config') and result.get('version', 0) > self.config_version:
@@ -908,7 +923,7 @@ class CloudAgent:
                 method='GET'
             )
 
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=60, context=self._get_ssl_context()) as response:
                 result = json.loads(response.read().decode('utf-8'))
 
                 if result.get('content'):
@@ -972,7 +987,7 @@ class CloudAgent:
                 method='POST'
             )
 
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=10, context=self._get_ssl_context()) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 if result.get('success'):
                     self.config_version = result.get('version', self.config_version)

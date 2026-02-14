@@ -5,6 +5,29 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.6] - 2026-02-14
+
+### Added
+- **Typography Settings**: New appearance options under admin panel
+  - Font family selection (System, Inter, Roboto, Monospace)
+  - Base font size (12-24px)
+  - Heading weight (Normal, Medium, Semibold, Bold)
+- **Layout Settings**: Customizable layout parameters
+  - Border radius (0-20px)
+  - iFrame gap/spacing (8-32px)
+  - Content padding (8-32px)
+- **Animation Settings**: Control over UI animations
+  - Enable/disable animations
+  - Transition speed (Slow, Normal, Fast)
+- **Android Home Screen Icon**: Support for Android "Add to Home Screen"
+  - PNG upload (192x192px recommended)
+  - Uses `<link rel="icon" sizes="192x192">` for Android devices
+
+### Changed
+- Empty text fields now allowed for all customization options
+- Custom CSS icon updated from ✨ to 🎯 for better distinction
+- Improved appearance settings organization in admin panel
+
 ## [1.2.5] - 2026-02-14
 
 ### Removed

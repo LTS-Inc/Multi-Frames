@@ -7,7 +7,7 @@ This document provides context for AI assistants working on the Multi-Frames cod
 **Multi-Frames** is a zero-dependency Python web server for displaying configurable iFrames and dashboard widgets. Designed for home dashboards, kiosks, digital signage, and Raspberry Pi deployments.
 
 - **Author**: Marco Longoria, LTS, Inc.
-- **Version**: 1.2.5
+- **Version**: 1.2.6
 - **License**: MIT
 - **Python**: 3.6+
 
@@ -224,4 +224,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.2.5** (2026-02-14)
+Current: **v1.2.6** (2026-02-14)

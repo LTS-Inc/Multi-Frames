@@ -222,7 +222,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.2.7"
+VERSION = "1.2.8"
 VERSION_DATE = "2026-02-14"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"

@@ -24,8 +24,8 @@ The main server file (~10,000 lines) contains all functionality in a single depl
 ### Constants (Lines 196-200)
 
 ```python
-VERSION = "1.2.6"           # Current version
-VERSION_DATE = "2026-02-05" # Release date
+VERSION = "1.2.7"           # Current version
+VERSION_DATE = "2026-02-14" # Release date
 DEFAULT_PORT = 8080         # Default HTTP port
 DEFAULT_HOST = "0.0.0.0"    # Listen on all interfaces
 ```
@@ -194,7 +194,7 @@ def escape_html(text):
 Package metadata and version information.
 
 ```python
-__version__ = "1.2.6"
+__version__ = "1.2.7"
 __author__ = "Marco Longoria"
 __company__ = "LTS, Inc."
 ```
@@ -465,7 +465,7 @@ router.get('/', serveDashboard);
   "last_seen": "2026-02-05T14:22:00Z",
   "status": "online",  // online, offline, unknown
   "info": {
-    "version": "1.2.6",
+    "version": "1.2.7",
     "ip": "192.168.1.100",
     "hostname": "raspberrypi",
     "temperature": 45.2,
@@ -535,7 +535,7 @@ router.get('/', serveDashboard);
     },
     "footer": {
       "enabled": true,
-      "text": "Multi-Frames v1.2.6 by LTS, Inc."
+      "text": "Multi-Frames v1.2.7 by LTS, Inc."
     },
     "theme": "dark",
     "background_color": "#1a1a2e",

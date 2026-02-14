@@ -238,16 +238,36 @@ export default {
         device.cpu_temp = body.cpu_temp;
         device.local_config_version = body.config_version;
 
+        // Check for config request flag and clear it
+        const configRequested = device.config_requested || false;
+        if (configRequested) {
+          device.config_requested = false;
+        }
+
         await env.DEVICES.put(`device:${deviceAuth.id}`, JSON.stringify(device));
 
         const cloudConfig = await env.CONFIGS.get(`config:${deviceAuth.id}`, 'json');
         const configUpdateAvailable = cloudConfig && cloudConfig.version > (body.config_version || 0);
 
-        return jsonResponse({
+        // Check for pending firmware update
+        const firmwareUpdateAvailable = device.firmware_pending || false;
+
+        const heartbeatResponse = {
           success: true,
           config_update_available: configUpdateAvailable,
-          config_version: cloudConfig?.version || 0
-        });
+          config_version: cloudConfig?.version || 0,
+          config_requested: configRequested
+        };
+
+        if (firmwareUpdateAvailable) {
+          const firmware = await env.CONFIGS.get('firmware:latest', 'json');
+          if (firmware) {
+            heartbeatResponse.firmware_update_available = true;
+            heartbeatResponse.firmware_version = firmware.version;
+          }
+        }
+
+        return jsonResponse(heartbeatResponse);
       }
 
       if (path === '/api/devices' && method === 'GET') {
@@ -352,6 +372,20 @@ export default {
         return jsonResponse({ success: true, version: newVersion });
       }
 
+      if (path.match(/^\/api\/config\/[\w-]+\/request$/) && method === 'POST') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const deviceId = path.split('/')[3];
+        const device = await env.DEVICES.get(`device:${deviceId}`, 'json');
+        if (!device) return errorResponse('Device not found', 404);
+
+        device.config_requested = true;
+        await env.DEVICES.put(`device:${deviceId}`, JSON.stringify(device));
+
+        return jsonResponse({ success: true, message: 'Config refresh requested. Device will sync on next heartbeat.' });
+      }
+
       if (path === '/api/config/bulk-push' && method === 'POST') {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
@@ -376,6 +410,106 @@ export default {
           }));
 
           results.push({ device_id: deviceId, version: newVersion });
+        }
+
+        return jsonResponse({ success: true, results });
+      }
+
+      // ============== FIRMWARE ROUTES ==============
+
+      if (path === '/api/firmware/upload' && method === 'POST') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const body = await request.json();
+        const { version, content, notes } = body;
+
+        if (!content) return errorResponse('Firmware content required', 400);
+        if (!version) return errorResponse('Firmware version required', 400);
+
+        const firmwareId = crypto.randomUUID();
+        const firmware = {
+          id: firmwareId,
+          version,
+          notes: notes || '',
+          content,
+          uploaded_by: user.email,
+          uploaded_at: new Date().toISOString(),
+          size: content.length
+        };
+
+        await env.CONFIGS.put('firmware:latest', JSON.stringify(firmware));
+
+        return jsonResponse({
+          success: true,
+          firmware_id: firmwareId,
+          version
+        });
+      }
+
+      if (path === '/api/firmware' && method === 'GET') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const firmware = await env.CONFIGS.get('firmware:latest', 'json');
+        if (!firmware) return jsonResponse({ firmware: null });
+
+        return jsonResponse({
+          firmware: {
+            id: firmware.id,
+            version: firmware.version,
+            notes: firmware.notes,
+            uploaded_by: firmware.uploaded_by,
+            uploaded_at: firmware.uploaded_at,
+            size: firmware.size
+          }
+        });
+      }
+
+      if (path === '/api/firmware/download' && method === 'GET') {
+        const deviceAuth = await verifyDeviceKey(request, env);
+        if (!deviceAuth) return errorResponse('Invalid device key', 401);
+
+        const firmware = await env.CONFIGS.get('firmware:latest', 'json');
+        if (!firmware) return errorResponse('No firmware available', 404);
+
+        const device = await env.DEVICES.get(`device:${deviceAuth.id}`, 'json');
+        if (device) {
+          device.firmware_pending = false;
+          await env.DEVICES.put(`device:${deviceAuth.id}`, JSON.stringify(device));
+        }
+
+        return jsonResponse({
+          content: firmware.content,
+          version: firmware.version
+        });
+      }
+
+      if (path === '/api/firmware/deploy' && method === 'POST') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const body = await request.json();
+        const { device_ids } = body;
+
+        if (!device_ids || !Array.isArray(device_ids)) {
+          return errorResponse('device_ids array required', 400);
+        }
+
+        const firmware = await env.CONFIGS.get('firmware:latest', 'json');
+        if (!firmware) return errorResponse('No firmware uploaded yet', 400);
+
+        const results = [];
+        for (const deviceId of device_ids) {
+          const device = await env.DEVICES.get(`device:${deviceId}`, 'json');
+          if (device) {
+            device.firmware_pending = true;
+            device.firmware_target_version = firmware.version;
+            await env.DEVICES.put(`device:${deviceId}`, JSON.stringify(device));
+            results.push({ device_id: deviceId, status: 'queued' });
+          } else {
+            results.push({ device_id: deviceId, status: 'not_found' });
+          }
         }
 
         return jsonResponse({ success: true, results });
@@ -1180,6 +1314,7 @@ function getDashboardHTML(branding) {
       token: null,
       user: null,
       devices: [],
+      firmware: null,
       branding: ${JSON.stringify(branding)},
       currentPage: 'devices',
       modal: null,
@@ -1203,6 +1338,7 @@ function getDashboardHTML(branding) {
         const verified = await verifyToken();
         if (verified) {
           await loadDevices();
+          await loadFirmware();
           setInterval(loadDevices, 30000);
         }
       }
@@ -1241,6 +1377,15 @@ function getDashboardHTML(branding) {
       const result = await api('/api/branding');
       state.branding = result.branding;
       render();
+    }
+
+    async function loadFirmware() {
+      try {
+        const result = await api('/api/firmware');
+        state.firmware = result.firmware;
+      } catch (e) {
+        state.firmware = null;
+      }
     }
 
     // Actions
@@ -1350,6 +1495,81 @@ function getDashboardHTML(branding) {
       }
     }
 
+    async function uploadFirmware(e) {
+      e.preventDefault();
+      const fileInput = document.getElementById('firmwareFile');
+      const notesInput = document.getElementById('firmwareNotes');
+
+      if (!fileInput.files.length) {
+        showToast('Please select a firmware file', 'error');
+        return;
+      }
+
+      const file = fileInput.files[0];
+      if (!file.name.endsWith('.py')) {
+        showToast('Firmware must be a .py file', 'error');
+        return;
+      }
+
+      const content = await file.text();
+
+      // Extract version from file content
+      const versionMatch = content.match(/VERSION\\s*=\\s*[\"']([^\"']+)[\"']/);
+      const version = versionMatch ? versionMatch[1] : 'unknown';
+
+      const result = await api('/api/firmware/upload', {
+        method: 'POST',
+        body: JSON.stringify({
+          version,
+          content,
+          notes: notesInput ? notesInput.value : ''
+        })
+      });
+
+      if (result.success) {
+        showToast('Firmware v' + version + ' uploaded');
+        await loadFirmware();
+        hideModal();
+        render();
+      } else {
+        showToast(result.error || 'Upload failed', 'error');
+      }
+    }
+
+    async function deployFirmware(e) {
+      e.preventDefault();
+      const checkboxes = document.querySelectorAll('.deploy-device-cb:checked');
+      const deviceIds = Array.from(checkboxes).map(cb => cb.value);
+
+      if (deviceIds.length === 0) {
+        showToast('Select at least one device', 'error');
+        return;
+      }
+
+      const result = await api('/api/firmware/deploy', {
+        method: 'POST',
+        body: JSON.stringify({ device_ids: deviceIds })
+      });
+
+      if (result.success) {
+        const queued = result.results.filter(r => r.status === 'queued').length;
+        showToast('Firmware queued for ' + queued + ' device(s)');
+        hideModal();
+        await loadDevices();
+      } else {
+        showToast(result.error || 'Deploy failed', 'error');
+      }
+    }
+
+    async function requestConfig(deviceId) {
+      const result = await api('/api/config/' + deviceId + '/request', { method: 'POST' });
+      if (result.success) {
+        showToast('Config refresh requested');
+      } else {
+        showToast(result.error || 'Request failed', 'error');
+      }
+    }
+
     // Render
     function render() {
       const app = document.getElementById('app');
@@ -1398,6 +1618,9 @@ function getDashboardHTML(branding) {
               <div class="nav-item \${state.currentPage === 'devices' ? 'active' : ''}" onclick="setPage('devices')">
                 <span class="nav-item-icon">📱</span> Devices
               </div>
+              <div class="nav-item \${state.currentPage === 'firmware' ? 'active' : ''}" onclick="setPage('firmware')">
+                <span class="nav-item-icon">📦</span> Firmware
+              </div>
               <div class="nav-item \${state.currentPage === 'settings' ? 'active' : ''}" onclick="setPage('settings')">
                 <span class="nav-item-icon">⚙️</span> Settings
               </div>
@@ -1421,6 +1644,7 @@ function getDashboardHTML(branding) {
 
           <main class="main-content">
             \${state.currentPage === 'devices' ? renderDevicesPage() : ''}
+            \${state.currentPage === 'firmware' ? renderFirmwarePage() : ''}
             \${state.currentPage === 'settings' ? renderSettingsPage() : ''}
           </main>
 
@@ -1496,7 +1720,7 @@ function getDashboardHTML(branding) {
           <div class="device-info">
             <div class="device-info-row">🖥️ <span>\${device.hostname}</span></div>
             <div class="device-info-row">🌐 <span>\${device.ip_address}</span></div>
-            <div class="device-info-row">📦 <span>v\${device.version}</span></div>
+            <div class="device-info-row">📦 <span>v\${device.version}\${device.firmware_pending ? ' ⬆️ Update pending' : ''}</span></div>
             <div class="device-info-row">🕐 <span>\${lastSeen}</span></div>
           </div>
 
@@ -1519,10 +1743,116 @@ function getDashboardHTML(branding) {
 
           <div class="device-actions">
             <button class="btn btn-secondary btn-sm" onclick="viewConfig('\${device.id}')">⚙️ Config</button>
+            <button class="btn btn-secondary btn-sm" onclick="requestConfig('\${device.id}')" title="Request device to sync its current config">🔄 Refresh</button>
             <button class="btn btn-danger btn-sm" onclick="deleteDevice('\${device.id}')">🗑️ Remove</button>
           </div>
         </div>
       \`;
+    }
+
+    function renderFirmwarePage() {
+      const fw = state.firmware;
+      const onlineDevices = state.devices.filter(d => d.status === 'online');
+
+      return \`
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Firmware</h1>
+            <p class="page-subtitle">Upload and deploy firmware updates to your devices</p>
+          </div>
+          <button class="btn btn-primary" onclick="showModal('uploadFirmware')">
+            <span>⬆️</span> Upload Firmware
+          </button>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--primary)20;color:var(--primary);">📦</div>
+            <div class="stat-value">\${fw ? 'v' + fw.version : 'None'}</div>
+            <div class="stat-label">Latest Firmware</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--accent)20;color:var(--accent);">📏</div>
+            <div class="stat-value">\${fw ? (fw.size / 1024).toFixed(0) + ' KB' : '-'}</div>
+            <div class="stat-label">File Size</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--success)20;color:var(--success);">📱</div>
+            <div class="stat-value">\${state.devices.filter(d => fw && d.version === fw.version).length}/\${state.devices.length}</div>
+            <div class="stat-label">Up to Date</div>
+          </div>
+        </div>
+
+        \${fw ? \`
+          <div class="settings-section">
+            <h3 class="settings-section-title">📋 Current Firmware</h3>
+            <div class="device-info">
+              <div class="device-info-row">📦 Version: <span>v\${fw.version}</span></div>
+              <div class="device-info-row">👤 Uploaded by: <span>\${fw.uploaded_by}</span></div>
+              <div class="device-info-row">🕐 Uploaded: <span>\${new Date(fw.uploaded_at).toLocaleString()}</span></div>
+              \${fw.notes ? '<div class="device-info-row">📝 Notes: <span>' + fw.notes + '</span></div>' : ''}
+            </div>
+            <button class="btn btn-primary" onclick="showModal('deployFirmware')">🚀 Deploy to Devices</button>
+          </div>
+        \` : \`
+          <div class="empty-state">
+            <div class="empty-state-icon">📦</div>
+            <h3>No firmware uploaded</h3>
+            <p>Upload a firmware file to deploy it to your devices</p>
+            <button class="btn btn-primary" onclick="showModal('uploadFirmware')">⬆️ Upload Firmware</button>
+          </div>
+        \`}
+
+        \${fw && state.devices.length > 0 ? \`
+          <div class="settings-section" style="margin-top:1.5rem;">
+            <h3 class="settings-section-title">📱 Device Firmware Status</h3>
+            <table style="width:100%;border-collapse:collapse;">
+              <thead>
+                <tr style="border-bottom:1px solid var(--border);">
+                  <th style="text-align:left;padding:0.75rem 0.5rem;color:var(--text-secondary);font-size:0.85rem;">Device</th>
+                  <th style="text-align:left;padding:0.75rem 0.5rem;color:var(--text-secondary);font-size:0.85rem;">Current Version</th>
+                  <th style="text-align:left;padding:0.75rem 0.5rem;color:var(--text-secondary);font-size:0.85rem;">Status</th>
+                  <th style="text-align:center;padding:0.75rem 0.5rem;color:var(--text-secondary);font-size:0.85rem;">Update</th>
+                </tr>
+              </thead>
+              <tbody>
+                \${state.devices.map(d => {
+                  const isCurrent = d.version === fw.version;
+                  const isPending = d.firmware_pending;
+                  let statusBadge;
+                  if (isCurrent) {
+                    statusBadge = '<span style="color:var(--success);font-size:0.85rem;">✓ Up to date</span>';
+                  } else if (isPending) {
+                    statusBadge = '<span style="color:var(--warning);font-size:0.85rem;">⏳ Pending</span>';
+                  } else {
+                    statusBadge = '<span style="color:var(--text-muted);font-size:0.85rem;">⬆ Update available</span>';
+                  }
+                  return '<tr style="border-bottom:1px solid var(--border);">' +
+                    '<td style="padding:0.75rem 0.5rem;font-weight:500;">' + d.name + '</td>' +
+                    '<td style="padding:0.75rem 0.5rem;">v' + d.version + '</td>' +
+                    '<td style="padding:0.75rem 0.5rem;">' + statusBadge + '</td>' +
+                    '<td style="padding:0.75rem 0.5rem;text-align:center;">' +
+                      (isCurrent ? '-' : '<button class=\\"btn btn-secondary btn-sm\\" onclick=\\"deploySingleDevice(\\'' + d.id + '\\')\\">Deploy</button>') +
+                    '</td></tr>';
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        \` : ''}
+      \`;
+    }
+
+    async function deploySingleDevice(deviceId) {
+      const result = await api('/api/firmware/deploy', {
+        method: 'POST',
+        body: JSON.stringify({ device_ids: [deviceId] })
+      });
+      if (result.success) {
+        showToast('Firmware queued for deployment');
+        await loadDevices();
+      } else {
+        showToast(result.error || 'Deploy failed', 'error');
+      }
     }
 
     function renderSettingsPage() {
@@ -1642,8 +1972,66 @@ function getDashboardHTML(branding) {
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" onclick="hideModal()">Cancel</button>
+            <button class="btn btn-secondary" onclick="requestConfig('\${m.data.deviceId}')" title="Ask device to push its current config">🔄 Refresh from Device</button>
             <button class="btn btn-primary" onclick="pushConfig('\${m.data.deviceId}', document.getElementById('configEditor').value)">Push to Device</button>
           </div>
+        \`;
+      } else if (m.type === 'uploadFirmware') {
+        content = \`
+          <div class="modal-header">
+            <h2 class="modal-title">Upload Firmware</h2>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
+          </div>
+          <form onsubmit="uploadFirmware(event)">
+            <div class="modal-body">
+              <div class="form-group">
+                <label class="form-label">Firmware File (.py)</label>
+                <input type="file" id="firmwareFile" accept=".py" required class="form-input" style="padding:0.5rem;">
+                <p class="form-hint">Select the multi_frames.py firmware file to upload</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Release Notes (optional)</label>
+                <textarea id="firmwareNotes" class="form-input" rows="3" placeholder="What changed in this version..."></textarea>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="hideModal()">Cancel</button>
+              <button type="submit" class="btn btn-primary">⬆️ Upload</button>
+            </div>
+          </form>
+        \`;
+      } else if (m.type === 'deployFirmware') {
+        const fw = state.firmware;
+        const eligibleDevices = state.devices.filter(d => d.version !== fw.version);
+        content = \`
+          <div class="modal-header">
+            <h2 class="modal-title">Deploy Firmware v\${fw.version}</h2>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
+          </div>
+          <form onsubmit="deployFirmware(event)">
+            <div class="modal-body">
+              \${eligibleDevices.length === 0 ? \`
+                <p style="color:var(--text-secondary);">All devices are already running v\${fw.version}.</p>
+              \` : \`
+                <p style="color:var(--text-secondary);margin-bottom:1rem;">Select devices to update to v\${fw.version}:</p>
+                <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                  \${eligibleDevices.map(d => \`
+                    <label style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;">
+                      <input type="checkbox" class="deploy-device-cb" value="\${d.id}" checked style="width:18px;height:18px;">
+                      <div>
+                        <div style="font-weight:500;">\${d.name}</div>
+                        <div style="font-size:0.8rem;color:var(--text-muted);">Currently: v\${d.version} \${d.status === 'online' ? '(online)' : '(offline)'}</div>
+                      </div>
+                    </label>
+                  \`).join('')}
+                </div>
+              \`}
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="hideModal()">Cancel</button>
+              \${eligibleDevices.length > 0 ? '<button type="submit" class="btn btn-primary">🚀 Deploy</button>' : ''}
+            </div>
+          </form>
         \`;
       }
 

@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.2.6-2026--02--14-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.2.7-2026--02--14-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -239,28 +239,28 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.2.6
+## 🆕 What's New in v1.2.7
 
 <table>
 <tr>
 <td>
 
-### 🎨 More Appearance Options
+### 📦 Cloud Firmware Management
 
-- Typography settings (font family, size, weight)
-- Layout settings (border radius, gaps, padding)
-- Animation settings (enable/disable, speed)
-- Android home screen icon support
+- Upload firmware to cloud portal
+- Deploy to devices individually or in bulk
+- Automatic validation, backup, and restart
+- Firmware status tracking per device
 
 </td>
 <td>
 
-### ✨ Customization Improvements
+### 🔄 Cloud Config Refresh
 
-- Empty text fields now allowed
-- Better form flexibility
-- Improved settings organization
-- Enhanced user experience
+- Request devices to push their current config
+- View live device configuration in cloud portal
+- Refresh button on device cards and config modal
+- Auto-sync on next device heartbeat
 
 </td>
 </tr>
@@ -522,6 +522,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.2.7** | 2026-02-14 | Cloud firmware deployment and config refresh |
 | **1.2.6** | 2026-02-14 | Typography, layout, animation settings; Android icon support |
 | **1.2.5** | 2026-02-14 | Mobile optimization, password toggle, removed connectivity test |
 | **1.2.4** | 2026-02-05 | Documentation: CLAUDE.md, ARCHITECTURE.md, CODEBASE.md |

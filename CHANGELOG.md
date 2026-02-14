@@ -5,6 +5,29 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.7] - 2026-02-14
+
+### Added
+- **Cloud Firmware Management**: Upload and deploy firmware to devices remotely
+  - New Firmware page in cloud dashboard with upload, deploy, and status tracking
+  - `POST /api/firmware/upload` - Upload firmware file with version auto-extraction
+  - `GET /api/firmware` - Get firmware metadata (version, size, uploader, date)
+  - `GET /api/firmware/download` - Device downloads firmware (device key auth)
+  - `POST /api/firmware/deploy` - Queue firmware deployment to selected devices
+  - Deploy modal with per-device selection and bulk deploy
+  - Device firmware status table showing current version vs latest
+  - Automatic firmware validation, backup, and server restart on device
+- **Cloud Config Refresh**: Request devices to push their current config
+  - `POST /api/config/{id}/request` - Request device to sync its config
+  - "Refresh" button on device cards in cloud dashboard
+  - "Refresh from Device" button in config view modal
+  - Device auto-pushes config on next heartbeat when requested
+
+### Changed
+- Heartbeat response now includes `firmware_update_available` and `config_requested` flags
+- Device cards show firmware update pending indicator
+- Cloud dashboard sidebar now includes Firmware navigation item
+
 ## [1.2.6] - 2026-02-14
 
 ### Added

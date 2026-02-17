@@ -145,7 +145,11 @@ export default {
         authUrl.searchParams.set('redirect_uri', `${url.origin}/auth/google/callback`);
         authUrl.searchParams.set('response_type', 'code');
         authUrl.searchParams.set('scope', 'openid email profile');
-        authUrl.searchParams.set('hd', env.ALLOWED_DOMAIN || '*');
+        authUrl.searchParams.set('access_type', 'online');
+        authUrl.searchParams.set('prompt', 'select_account');
+        if (env.ALLOWED_DOMAIN) {
+          authUrl.searchParams.set('hd', env.ALLOWED_DOMAIN);
+        }
         return jsonResponse({ url: authUrl.toString() });
       }
 

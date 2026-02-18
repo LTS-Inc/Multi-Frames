@@ -76,7 +76,7 @@ The main server is a single-file Python application using only the standard libr
 │  │                 │  │                 │  │                 │ │
 │  │ - In-memory log │  │ - Heartbeat     │  │ - Multi-thread  │ │
 │  │ - Level filter  │  │ - Config sync   │  │ - Graceful stop │ │
-│  │ - Max entries   │  │ - Status report │  │                 │ │
+│  │ - Max entries   │  │ - Metrics send  │  │                 │ │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -105,10 +105,19 @@ Cloudflare Worker providing centralized management.
 │  │ - Session mgmt  │  │ - List/Delete   │  │ - Bulk push     │ │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
 │                                                                  │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
+│  │Widget Templates │  │ Metrics/History │  │ Branding Assets │ │
+│  │                 │  │                 │  │                 │ │
+│  │ - CRUD          │  │ - Record (5min) │  │ - Logo upload   │ │
+│  │ - Push to devs  │  │ - Query 24h/7d  │  │ - Favicon       │ │
+│  │ - Type configs  │  │ - Daily summary │  │ - iOS/Android   │ │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
+│                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                 KV Namespaces                            │   │
 │  │  DEVICES  - Device registry (id, key, name, status)      │   │
-│  │  CONFIGS  - Device configurations (JSON blobs)           │   │
+│  │  CONFIGS  - Device configs, branding, widget templates,  │   │
+│  │             firmware, metrics (with TTL expiration)       │   │
 │  │  SESSIONS - User auth sessions (JWT tokens)              │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.2.3
+Multi-Frames v1.3.0
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -28,6 +28,15 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.3.0 (2026-02-18)
+        - Cloud portal customization: full branding with logo/icon uploads
+        - iOS and Android home screen icon uploads for cloud portal
+        - Widget template management: create, push to devices from cloud
+        - Historical metrics logging: CPU temp, memory, disk, uptime tracking
+        - Metrics visualization with 24h/7d/30d chart views
+        - Device metrics auto-reported every 5 minutes
+        - New portal pages: Widgets, Metrics, expanded Settings with tabs
+
     v1.2.7 (2026-02-14)
         - Cloud firmware management: upload, deploy, and auto-update devices remotely
         - Cloud config refresh: request devices to push their current config
@@ -222,8 +231,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.2.8"
-VERSION_DATE = "2026-02-14"
+VERSION = "1.3.0"
+VERSION_DATE = "2026-02-18"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -775,10 +784,17 @@ class CloudAgent:
 
     def _run(self):
         """Background thread main loop."""
+        metrics_counter = 0
         while not self._stop_event.is_set():
             try:
                 self._send_heartbeat()
                 self._check_config_update()
+
+                # Send metrics every 5th heartbeat (5 minutes)
+                metrics_counter += 1
+                if metrics_counter >= 5:
+                    metrics_counter = 0
+                    self._send_metrics()
             except Exception as e:
                 self._last_error = str(e)
                 self._connected = False
@@ -997,6 +1013,54 @@ class CloudAgent:
 
         except Exception as e:
             return False, str(e)
+
+    def _send_metrics(self):
+        """Send device metrics to cloud for historical tracking."""
+        if not self.enabled or not self.cloud_url or not self.device_key:
+            return
+
+        import urllib.request
+        import json
+
+        pi_info = get_raspberry_pi_info()
+        sys_info = get_system_info()
+
+        metrics_data = {
+            'cpu_temp': pi_info.get('temperature') if pi_info else None,
+            'memory_used': pi_info.get('memory_used') if pi_info else None,
+            'memory_total': pi_info.get('memory_total') if pi_info else None,
+            'disk_used': pi_info.get('disk_used') if pi_info else None,
+            'disk_total': pi_info.get('disk_total') if pi_info else None,
+            'uptime': sys_info.get('server_uptime_seconds', 0),
+        }
+
+        # Try to get CPU usage on Linux
+        try:
+            with open('/proc/stat', 'r') as f:
+                line = f.readline()
+                parts = line.split()
+                total = sum(int(p) for p in parts[1:])
+                idle = int(parts[4])
+                usage = round((1 - idle / total) * 100, 1) if total > 0 else None
+                metrics_data['cpu_usage'] = usage
+        except Exception:
+            metrics_data['cpu_usage'] = None
+
+        try:
+            req = urllib.request.Request(
+                f"{self.cloud_url}/api/metrics/record",
+                data=json.dumps(metrics_data).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'X-Device-Key': self.device_key,
+                    'User-Agent': f'Multi-Frames/{VERSION}'
+                },
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=10, context=self._get_ssl_context()) as response:
+                pass  # Fire and forget
+        except Exception as e:
+            server_logger.error(f"Cloud metrics send failed: {e}")
 
     def _get_local_ip(self):
         """Get local IP address."""

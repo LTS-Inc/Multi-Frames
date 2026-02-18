@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.2.8-2026--02--14-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.3.0-2026--02--18-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -161,9 +161,10 @@ Control network devices directly from your dashboard:
 
 **Branding**
 
-- Logo upload
+- Logo upload (file or URL)
 - Custom favicon
 - iOS home screen icon
+- Android home screen icon
 - Header text
 
 </td>
@@ -239,27 +240,51 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.2.8
+## 🆕 What's New in v1.3.0
 
 <table>
 <tr>
 <td>
 
-### 🔒 Cloud Agent SSL Fix
+### 🎨 Cloud Portal Customization
 
-- Fixed `CERTIFICATE_VERIFY_FAILED` error on devices without CA certificates
-- Smart SSL context with automatic fallback for Raspberry Pi and minimal installs
-- Applied to all CloudAgent HTTPS calls (heartbeat, config, firmware)
+- **Logo upload** with base64 storage (200x200px+ recommended)
+- **iOS home screen icon** (180x180px Apple Touch Icon)
+- **Android home screen icon** (192x192px + Web App Manifest)
+- **Favicon upload** for browser tab icon
+- Tabbed settings: Branding / App Icons / Colors & Theme
 
 </td>
 <td>
 
-### 📦 Cloud Firmware Management (v1.2.7)
+### 🧩 Widget Templates
 
-- Upload firmware to cloud portal
-- Deploy to devices individually or in bulk
-- Automatic validation, backup, and restart
-- Config refresh from cloud dashboard
+- Create widget templates from the cloud portal
+- Configure all 8 widget types with custom styling
+- **Push widgets to devices** individually or in bulk
+- Manage templates with create/edit/delete
+
+</td>
+</tr>
+<tr>
+<td>
+
+### 📊 Historical Metrics
+
+- Devices auto-report CPU temp, memory, disk, CPU usage
+- **24h/7d/30d** interactive SVG charts
+- Daily summaries with 90-day retention
+- Per-device metric selector and comparison
+
+</td>
+<td>
+
+### 📱 Responsive Design
+
+- Mobile-optimized portal with touch-friendly uploads
+- Web App Manifest for Android "Add to Home Screen"
+- iOS standalone web app support
+- All new pages fully responsive
 
 </td>
 </tr>
@@ -521,6 +546,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.3.0** | 2026-02-18 | Cloud portal customization, widget templates, historical metrics |
 | **1.2.8** | 2026-02-14 | Fix cloud agent SSL certificate verification error |
 | **1.2.7** | 2026-02-14 | Cloud firmware deployment and config refresh |
 | **1.2.6** | 2026-02-14 | Typography, layout, animation settings; Android icon support |

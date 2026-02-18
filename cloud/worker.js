@@ -78,14 +78,29 @@ async function verifyAuth(request, env) {
   return await verifyToken(auth.substring(7), env);
 }
 
-// Default branding
+// Default branding (expanded with logo/icon uploads and widget templates)
 const DEFAULT_BRANDING = {
   companyName: 'Multi-Frames',
   logoUrl: '',
+  logoData: '',
+  logoMime: '',
+  faviconData: '',
+  faviconMime: '',
+  appleTouchIconData: '',
+  appleTouchIconMime: '',
+  androidIconData: '',
+  androidIconMime: '',
   primaryColor: '#3b82f6',
   accentColor: '#8b5cf6',
   darkMode: true
 };
+
+// Default widget templates for portal-managed widgets
+const DEFAULT_WIDGET_TEMPLATES = [];
+
+// Max upload sizes
+const MAX_LOGO_SIZE = 2 * 1024 * 1024; // 2MB
+const MAX_ICON_SIZE = 512 * 1024; // 512KB
 
 export default {
   async fetch(request, env, ctx) {
@@ -171,13 +186,36 @@ export default {
         if (!user) return errorResponse('Unauthorized', 401);
 
         const body = await request.json();
+        const existing = await env.CONFIGS.get('branding', 'json') || DEFAULT_BRANDING;
         const branding = {
           companyName: body.companyName || DEFAULT_BRANDING.companyName,
-          logoUrl: body.logoUrl || '',
+          logoUrl: body.logoUrl !== undefined ? body.logoUrl : (existing.logoUrl || ''),
+          logoData: body.logoData !== undefined ? body.logoData : (existing.logoData || ''),
+          logoMime: body.logoMime !== undefined ? body.logoMime : (existing.logoMime || ''),
+          faviconData: body.faviconData !== undefined ? body.faviconData : (existing.faviconData || ''),
+          faviconMime: body.faviconMime !== undefined ? body.faviconMime : (existing.faviconMime || ''),
+          appleTouchIconData: body.appleTouchIconData !== undefined ? body.appleTouchIconData : (existing.appleTouchIconData || ''),
+          appleTouchIconMime: body.appleTouchIconMime !== undefined ? body.appleTouchIconMime : (existing.appleTouchIconMime || ''),
+          androidIconData: body.androidIconData !== undefined ? body.androidIconData : (existing.androidIconData || ''),
+          androidIconMime: body.androidIconMime !== undefined ? body.androidIconMime : (existing.androidIconMime || ''),
           primaryColor: body.primaryColor || DEFAULT_BRANDING.primaryColor,
           accentColor: body.accentColor || DEFAULT_BRANDING.accentColor,
           darkMode: body.darkMode !== false
         };
+
+        // Validate upload sizes
+        if (branding.logoData && branding.logoData.length > MAX_LOGO_SIZE) {
+          return errorResponse('Logo file too large (max 2MB)', 400);
+        }
+        if (branding.faviconData && branding.faviconData.length > MAX_ICON_SIZE) {
+          return errorResponse('Favicon too large (max 512KB)', 400);
+        }
+        if (branding.appleTouchIconData && branding.appleTouchIconData.length > MAX_ICON_SIZE) {
+          return errorResponse('Apple touch icon too large (max 512KB)', 400);
+        }
+        if (branding.androidIconData && branding.androidIconData.length > MAX_ICON_SIZE) {
+          return errorResponse('Android icon too large (max 512KB)', 400);
+        }
 
         await env.CONFIGS.put('branding', JSON.stringify(branding));
         return jsonResponse({ success: true, branding });
@@ -519,6 +557,334 @@ export default {
         return jsonResponse({ success: true, results });
       }
 
+      // ============== WIDGET TEMPLATE ROUTES ==============
+
+      if (path === '/api/widget-templates' && method === 'GET') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const templates = await env.CONFIGS.get('widget_templates', 'json') || [];
+        return jsonResponse({ templates });
+      }
+
+      if (path === '/api/widget-templates' && method === 'POST') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const body = await request.json();
+        if (!body.name || !body.type) return errorResponse('name and type required', 400);
+
+        const templates = await env.CONFIGS.get('widget_templates', 'json') || [];
+        const template = {
+          id: crypto.randomUUID(),
+          name: body.name,
+          type: body.type,
+          size: body.size || 'medium',
+          config: body.config || {},
+          bg_color: body.bg_color || '#141416',
+          text_color: body.text_color || '#e8e8e8',
+          border_radius: body.border_radius || 8,
+          created_by: user.email,
+          created_at: new Date().toISOString()
+        };
+
+        templates.push(template);
+        await env.CONFIGS.put('widget_templates', JSON.stringify(templates));
+        return jsonResponse({ success: true, template });
+      }
+
+      if (path.match(/^\/api\/widget-templates\/[\w-]+$/) && method === 'PUT') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const templateId = path.split('/').pop();
+        const body = await request.json();
+        const templates = await env.CONFIGS.get('widget_templates', 'json') || [];
+        const idx = templates.findIndex(t => t.id === templateId);
+        if (idx === -1) return errorResponse('Template not found', 404);
+
+        templates[idx] = { ...templates[idx], ...body, id: templateId, updated_at: new Date().toISOString() };
+        await env.CONFIGS.put('widget_templates', JSON.stringify(templates));
+        return jsonResponse({ success: true, template: templates[idx] });
+      }
+
+      if (path.match(/^\/api\/widget-templates\/[\w-]+$/) && method === 'DELETE') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const templateId = path.split('/').pop();
+        const templates = await env.CONFIGS.get('widget_templates', 'json') || [];
+        const filtered = templates.filter(t => t.id !== templateId);
+        await env.CONFIGS.put('widget_templates', JSON.stringify(filtered));
+        return jsonResponse({ success: true });
+      }
+
+      if (path === '/api/widget-templates/push' && method === 'POST') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const body = await request.json();
+        const { template_id, device_ids } = body;
+        if (!template_id || !device_ids || !Array.isArray(device_ids)) {
+          return errorResponse('template_id and device_ids array required', 400);
+        }
+
+        const templates = await env.CONFIGS.get('widget_templates', 'json') || [];
+        const template = templates.find(t => t.id === template_id);
+        if (!template) return errorResponse('Template not found', 404);
+
+        const widget = {
+          id: crypto.randomUUID(),
+          type: template.type,
+          name: template.name,
+          enabled: true,
+          size: template.size,
+          config: template.config,
+          bg_color: template.bg_color,
+          text_color: template.text_color,
+          border_radius: template.border_radius
+        };
+
+        const results = [];
+        for (const deviceId of device_ids) {
+          const existing = await env.CONFIGS.get(`config:${deviceId}`, 'json');
+          if (existing && existing.data) {
+            if (!existing.data.widgets) existing.data.widgets = [];
+            existing.data.widgets.push({ ...widget, id: crypto.randomUUID() });
+            const newVersion = (existing.version || 0) + 1;
+            await env.CONFIGS.put(`config:${deviceId}`, JSON.stringify({
+              ...existing,
+              data: existing.data,
+              version: newVersion,
+              updated_by: user.email,
+              updated_at: new Date().toISOString()
+            }));
+            results.push({ device_id: deviceId, status: 'pushed', version: newVersion });
+          } else {
+            results.push({ device_id: deviceId, status: 'no_config' });
+          }
+        }
+
+        return jsonResponse({ success: true, results });
+      }
+
+      // ============== HISTORICAL DATA / METRICS ROUTES ==============
+
+      if (path === '/api/metrics/record' && method === 'POST') {
+        const deviceAuth = await verifyDeviceKey(request, env);
+        if (!deviceAuth) return errorResponse('Invalid device key', 401);
+
+        const body = await request.json();
+        const timestamp = new Date().toISOString();
+        const metrics = {
+          timestamp,
+          cpu_temp: body.cpu_temp || null,
+          memory_used: body.memory_used || null,
+          memory_total: body.memory_total || null,
+          disk_used: body.disk_used || null,
+          disk_total: body.disk_total || null,
+          uptime: body.uptime || null,
+          cpu_usage: body.cpu_usage || null,
+          network_rx: body.network_rx || null,
+          network_tx: body.network_tx || null,
+          custom: body.custom || {}
+        };
+
+        // Store metrics with hour-granularity keys for efficient retrieval
+        const hourKey = timestamp.substring(0, 13); // "2026-02-18T14"
+        const dayKey = timestamp.substring(0, 10); // "2026-02-18"
+        const storageKey = `metrics:${deviceAuth.id}:${hourKey}`;
+
+        const existing = await env.CONFIGS.get(storageKey, 'json') || [];
+        existing.push(metrics);
+
+        // Keep max 60 entries per hour (one per minute)
+        if (existing.length > 60) existing.splice(0, existing.length - 60);
+
+        await env.CONFIGS.put(storageKey, JSON.stringify(existing), {
+          expirationTtl: 60 * 60 * 24 * 30 // 30-day retention
+        });
+
+        // Update daily summary
+        const summaryKey = `metrics_summary:${deviceAuth.id}:${dayKey}`;
+        const summary = await env.CONFIGS.get(summaryKey, 'json') || {
+          date: dayKey,
+          data_points: 0,
+          avg_cpu_temp: null,
+          max_cpu_temp: null,
+          avg_memory_pct: null,
+          avg_cpu_usage: null,
+          hours_online: 0,
+          hours: {}
+        };
+
+        const hour = parseInt(timestamp.substring(11, 13));
+        summary.data_points++;
+        summary.hours[hour] = true;
+        summary.hours_online = Object.keys(summary.hours).length;
+
+        if (metrics.cpu_temp !== null) {
+          if (summary.avg_cpu_temp === null) {
+            summary.avg_cpu_temp = metrics.cpu_temp;
+            summary.max_cpu_temp = metrics.cpu_temp;
+          } else {
+            summary.avg_cpu_temp = (summary.avg_cpu_temp * (summary.data_points - 1) + metrics.cpu_temp) / summary.data_points;
+            summary.max_cpu_temp = Math.max(summary.max_cpu_temp, metrics.cpu_temp);
+          }
+        }
+
+        if (metrics.memory_used !== null && metrics.memory_total !== null && metrics.memory_total > 0) {
+          const memPct = (metrics.memory_used / metrics.memory_total) * 100;
+          if (summary.avg_memory_pct === null) {
+            summary.avg_memory_pct = memPct;
+          } else {
+            summary.avg_memory_pct = (summary.avg_memory_pct * (summary.data_points - 1) + memPct) / summary.data_points;
+          }
+        }
+
+        if (metrics.cpu_usage !== null) {
+          if (summary.avg_cpu_usage === null) {
+            summary.avg_cpu_usage = metrics.cpu_usage;
+          } else {
+            summary.avg_cpu_usage = (summary.avg_cpu_usage * (summary.data_points - 1) + metrics.cpu_usage) / summary.data_points;
+          }
+        }
+
+        await env.CONFIGS.put(summaryKey, JSON.stringify(summary), {
+          expirationTtl: 60 * 60 * 24 * 90 // 90-day retention for summaries
+        });
+
+        return jsonResponse({ success: true });
+      }
+
+      if (path.match(/^\/api\/metrics\/[\w-]+$/) && method === 'GET') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const deviceId = path.split('/').pop();
+        const range = url.searchParams.get('range') || '24h';
+        const metric = url.searchParams.get('metric') || 'cpu_temp';
+
+        const now = new Date();
+        let dataPoints = [];
+
+        if (range === '24h') {
+          // Fetch last 24 hourly keys
+          for (let i = 23; i >= 0; i--) {
+            const d = new Date(now.getTime() - i * 60 * 60 * 1000);
+            const hourKey = d.toISOString().substring(0, 13);
+            const data = await env.CONFIGS.get(`metrics:${deviceId}:${hourKey}`, 'json');
+            if (data && data.length > 0) {
+              // Average the values for this hour
+              const values = data.map(m => m[metric]).filter(v => v !== null && v !== undefined);
+              if (values.length > 0) {
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                dataPoints.push({
+                  timestamp: hourKey + ':00:00Z',
+                  value: Math.round(avg * 10) / 10,
+                  count: values.length
+                });
+              }
+            }
+          }
+        } else if (range === '7d' || range === '30d') {
+          const days = range === '7d' ? 7 : 30;
+          for (let i = days - 1; i >= 0; i--) {
+            const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+            const dayKey = d.toISOString().substring(0, 10);
+            const summary = await env.CONFIGS.get(`metrics_summary:${deviceId}:${dayKey}`, 'json');
+            if (summary) {
+              let value = null;
+              if (metric === 'cpu_temp') value = summary.avg_cpu_temp;
+              else if (metric === 'memory_pct') value = summary.avg_memory_pct;
+              else if (metric === 'cpu_usage') value = summary.avg_cpu_usage;
+              else if (metric === 'hours_online') value = summary.hours_online;
+
+              if (value !== null) {
+                dataPoints.push({
+                  timestamp: dayKey,
+                  value: Math.round(value * 10) / 10,
+                  data_points: summary.data_points,
+                  max_temp: summary.max_cpu_temp
+                });
+              }
+            }
+          }
+        }
+
+        return jsonResponse({ device_id: deviceId, metric, range, data: dataPoints });
+      }
+
+      if (path.match(/^\/api\/metrics\/[\w-]+\/latest$/) && method === 'GET') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const deviceId = path.split('/')[3];
+        const hourKey = new Date().toISOString().substring(0, 13);
+        const data = await env.CONFIGS.get(`metrics:${deviceId}:${hourKey}`, 'json') || [];
+        const latest = data.length > 0 ? data[data.length - 1] : null;
+
+        return jsonResponse({ device_id: deviceId, latest });
+      }
+
+      // ============== BRANDING ASSET ROUTES ==============
+
+      if (path === '/api/branding/logo' && method === 'GET') {
+        const branding = await env.CONFIGS.get('branding', 'json') || DEFAULT_BRANDING;
+        if (!branding.logoData) return errorResponse('No logo uploaded', 404);
+
+        const binary = Uint8Array.from(atob(branding.logoData), c => c.charCodeAt(0));
+        return new Response(binary, {
+          headers: {
+            'Content-Type': branding.logoMime || 'image/png',
+            'Cache-Control': 'public, max-age=3600',
+            ...CORS_HEADERS
+          }
+        });
+      }
+
+      if (path === '/api/branding/favicon' && method === 'GET') {
+        const branding = await env.CONFIGS.get('branding', 'json') || DEFAULT_BRANDING;
+        if (!branding.faviconData) return errorResponse('No favicon uploaded', 404);
+
+        const binary = Uint8Array.from(atob(branding.faviconData), c => c.charCodeAt(0));
+        return new Response(binary, {
+          headers: {
+            'Content-Type': branding.faviconMime || 'image/x-icon',
+            'Cache-Control': 'public, max-age=3600',
+            ...CORS_HEADERS
+          }
+        });
+      }
+
+      if (path === '/api/branding/apple-touch-icon' && method === 'GET') {
+        const branding = await env.CONFIGS.get('branding', 'json') || DEFAULT_BRANDING;
+        if (!branding.appleTouchIconData) return errorResponse('No Apple touch icon uploaded', 404);
+
+        const binary = Uint8Array.from(atob(branding.appleTouchIconData), c => c.charCodeAt(0));
+        return new Response(binary, {
+          headers: {
+            'Content-Type': branding.appleTouchIconMime || 'image/png',
+            'Cache-Control': 'public, max-age=3600',
+            ...CORS_HEADERS
+          }
+        });
+      }
+
+      if (path === '/api/branding/android-icon' && method === 'GET') {
+        const branding = await env.CONFIGS.get('branding', 'json') || DEFAULT_BRANDING;
+        if (!branding.androidIconData) return errorResponse('No Android icon uploaded', 404);
+
+        const binary = Uint8Array.from(atob(branding.androidIconData), c => c.charCodeAt(0));
+        return new Response(binary, {
+          headers: {
+            'Content-Type': branding.androidIconMime || 'image/png',
+            'Cache-Control': 'public, max-age=3600',
+            ...CORS_HEADERS
+          }
+        });
+      }
+
       // ============== DASHBOARD ==============
 
       if (path === '/dashboard' || path === '/' || path === '') {
@@ -538,12 +904,36 @@ export default {
 };
 
 function getDashboardHTML(branding) {
+  const hasLogo = !!(branding.logoData || branding.logoUrl);
+  const logoSrc = branding.logoData
+    ? 'data:' + (branding.logoMime || 'image/png') + ';base64,' + branding.logoData
+    : branding.logoUrl;
+  const hasFavicon = !!branding.faviconData;
+  const hasAppleIcon = !!branding.appleTouchIconData;
+  const hasAndroidIcon = !!branding.androidIconData;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="${branding.primaryColor}">
   <title>${branding.companyName} - Cloud Dashboard</title>
+  ${hasFavicon ? '<link rel="icon" href="/api/branding/favicon">' : ''}
+  ${hasAppleIcon ? '<link rel="apple-touch-icon" sizes="180x180" href="/api/branding/apple-touch-icon">' : ''}
+  ${hasAndroidIcon ? '<link rel="icon" sizes="192x192" href="/api/branding/android-icon">' : ''}
+  ${hasAndroidIcon ? `<link rel="manifest" href="data:application/json;base64,${btoa(JSON.stringify({
+    name: branding.companyName,
+    short_name: branding.companyName,
+    start_url: '/dashboard',
+    display: 'standalone',
+    background_color: branding.darkMode ? '#0f0f0f' : '#ffffff',
+    theme_color: branding.primaryColor,
+    icons: [{ src: '/api/branding/android-icon', sizes: '192x192', type: branding.androidIconMime || 'image/png' }]
+  }))}">` : ''}
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -1307,6 +1697,199 @@ function getDashboardHTML(branding) {
 
     .toast-success { border-left: 4px solid var(--success); }
     .toast-error { border-left: 4px solid var(--error); }
+
+    /* File Upload */
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: var(--bg-tertiary);
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+      border-color: var(--primary);
+      background: var(--primary)08;
+    }
+    .upload-zone-icon { font-size: 2rem; margin-bottom: 0.5rem; opacity: 0.6; }
+    .upload-zone-text { color: var(--text-secondary); font-size: 0.85rem; }
+    .upload-zone-hint { color: var(--text-muted); font-size: 0.75rem; margin-top: 0.25rem; }
+    .upload-preview {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-top: 0.75rem;
+    }
+    .upload-preview img {
+      width: 48px;
+      height: 48px;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 1px solid var(--border);
+    }
+    .upload-preview-info { flex: 1; }
+    .upload-preview-name { font-weight: 500; font-size: 0.85rem; }
+    .upload-preview-size { font-size: 0.75rem; color: var(--text-muted); }
+
+    /* Chart */
+    .chart-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    .chart-title { font-weight: 600; font-size: 1rem; }
+    .chart-controls {
+      display: flex;
+      gap: 0.25rem;
+      background: var(--bg-tertiary);
+      border-radius: 8px;
+      padding: 0.25rem;
+    }
+    .chart-controls button {
+      padding: 0.375rem 0.75rem;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.2s;
+    }
+    .chart-controls button.active {
+      background: var(--primary);
+      color: white;
+    }
+    .chart-svg {
+      width: 100%;
+      height: 200px;
+    }
+    .chart-empty {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    /* Widget template cards */
+    .widget-tmpl-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+    .widget-tmpl-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.25rem;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.2s;
+    }
+    .widget-tmpl-card:hover {
+      border-color: var(--primary);
+      box-shadow: var(--shadow);
+    }
+    .widget-tmpl-type {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.25rem 0.625rem;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      background: var(--primary)15;
+      color: var(--primary);
+      margin-bottom: 0.75rem;
+    }
+    .widget-tmpl-name { font-weight: 600; font-size: 1.05rem; margin-bottom: 0.5rem; }
+    .widget-tmpl-preview {
+      width: 100%;
+      height: 80px;
+      border-radius: 8px;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+      opacity: 0.5;
+    }
+    .widget-tmpl-actions { display: flex; gap: 0.5rem; }
+    .widget-tmpl-actions .btn { flex: 1; justify-content: center; }
+
+    /* Tabs for sub-navigation */
+    .tab-bar {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1.5rem;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .tab-item {
+      padding: 0.75rem 1.25rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .tab-item:hover { color: var(--text-primary); }
+    .tab-item.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+
+    /* Metric badge */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .metric-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem;
+      text-align: center;
+    }
+    .metric-value { font-size: 1.5rem; font-weight: 700; }
+    .metric-label { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+    .metric-trend { font-size: 0.7rem; margin-top: 0.25rem; }
+    .metric-trend.up { color: var(--error); }
+    .metric-trend.down { color: var(--success); }
+    .metric-trend.stable { color: var(--text-muted); }
+
+    /* Responsive adjustments for new sections */
+    @media (max-width: 768px) {
+      .chart-svg { height: 150px; }
+      .widget-tmpl-grid { grid-template-columns: 1fr; }
+      .metric-grid { grid-template-columns: repeat(2, 1fr); }
+      .upload-zone { padding: 1rem; }
+      .tab-bar { gap: 0; }
+      .tab-item { padding: 0.625rem 0.75rem; font-size: 0.8rem; }
+    }
+    @media (max-width: 480px) {
+      .metric-grid { grid-template-columns: 1fr 1fr; }
+      .chart-header { flex-direction: column; align-items: flex-start; }
+    }
   </style>
 </head>
 <body>
@@ -1320,9 +1903,16 @@ function getDashboardHTML(branding) {
       devices: [],
       firmware: null,
       branding: ${JSON.stringify(branding)},
+      widgetTemplates: [],
+      metricsCache: {},
+      metricsDevice: null,
+      metricsRange: '24h',
+      metricsMetric: 'cpu_temp',
       currentPage: 'devices',
+      settingsTab: 'branding',
       modal: null,
-      sidebarOpen: false
+      sidebarOpen: false,
+      pendingUploads: {}
     };
 
     // Init
@@ -1341,8 +1931,7 @@ function getDashboardHTML(branding) {
       if (state.token) {
         const verified = await verifyToken();
         if (verified) {
-          await loadDevices();
-          await loadFirmware();
+          await Promise.all([loadDevices(), loadFirmware(), loadWidgetTemplates()]);
           setInterval(loadDevices, 30000);
         }
       }
@@ -1390,6 +1979,62 @@ function getDashboardHTML(branding) {
       } catch (e) {
         state.firmware = null;
       }
+    }
+
+    async function loadWidgetTemplates() {
+      try {
+        const result = await api('/api/widget-templates');
+        state.widgetTemplates = result.templates || [];
+      } catch (e) {
+        state.widgetTemplates = [];
+      }
+    }
+
+    async function loadMetrics(deviceId, range, metric) {
+      const cacheKey = deviceId + ':' + range + ':' + metric;
+      try {
+        const result = await api('/api/metrics/' + deviceId + '?range=' + range + '&metric=' + metric);
+        state.metricsCache[cacheKey] = result.data || [];
+      } catch (e) {
+        state.metricsCache[cacheKey] = [];
+      }
+      render();
+    }
+
+    // File upload helpers
+    function handleFileUpload(inputId, field, maxSize, previewId) {
+      const input = document.getElementById(inputId);
+      if (!input || !input.files.length) return;
+
+      const file = input.files[0];
+      if (file.size > maxSize) {
+        showToast('File too large (max ' + Math.round(maxSize/1024) + 'KB)', 'error');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const base64 = e.target.result.split(',')[1];
+        const mime = file.type || 'image/png';
+        state.pendingUploads[field + 'Data'] = base64;
+        state.pendingUploads[field + 'Mime'] = mime;
+
+        // Show preview
+        const preview = document.getElementById(previewId);
+        if (preview) {
+          preview.innerHTML = '<div class="upload-preview"><img src="' + e.target.result + '" alt="Preview"><div class="upload-preview-info"><div class="upload-preview-name">' + file.name + '</div><div class="upload-preview-size">' + (file.size / 1024).toFixed(1) + ' KB</div></div><button class="btn btn-ghost btn-sm" onclick="clearUpload(\\'' + field + '\\',\\'' + previewId + '\\',\\'' + inputId + '\\')">Remove</button></div>';
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function clearUpload(field, previewId, inputId) {
+      delete state.pendingUploads[field + 'Data'];
+      delete state.pendingUploads[field + 'Mime'];
+      const preview = document.getElementById(previewId);
+      if (preview) preview.innerHTML = '';
+      const input = document.getElementById(inputId);
+      if (input) input.value = '';
     }
 
     // Actions
@@ -1482,21 +2127,113 @@ function getDashboardHTML(branding) {
     async function saveBranding(e) {
       e.preventDefault();
       const form = e.target;
+      const payload = {
+        companyName: form.companyName.value,
+        logoUrl: form.logoUrl ? form.logoUrl.value : '',
+        primaryColor: form.primaryColor.value,
+        accentColor: form.accentColor.value,
+        darkMode: form.darkMode.checked,
+        ...state.pendingUploads
+      };
+
       const result = await api('/api/branding', {
         method: 'PUT',
-        body: JSON.stringify({
-          companyName: form.companyName.value,
-          logoUrl: form.logoUrl.value,
-          primaryColor: form.primaryColor.value,
-          accentColor: form.accentColor.value,
-          darkMode: form.darkMode.checked
-        })
+        body: JSON.stringify(payload)
       });
 
       if (result.success) {
         state.branding = result.branding;
-        showToast('Branding saved! Refresh to see changes.');
+        state.pendingUploads = {};
+        showToast('Branding saved! Refresh to see full changes.');
+      } else {
+        showToast(result.error || 'Save failed', 'error');
       }
+    }
+
+    function clearBrandingAsset(field) {
+      state.pendingUploads[field + 'Data'] = '';
+      state.pendingUploads[field + 'Mime'] = '';
+      showToast('Asset will be removed on save');
+      render();
+    }
+
+    // Widget Template Actions
+    async function createWidgetTemplate(e) {
+      e.preventDefault();
+      const form = e.target;
+      const configStr = form.widgetConfig ? form.widgetConfig.value : '{}';
+      let config;
+      try { config = JSON.parse(configStr); } catch(ex) { showToast('Invalid JSON config', 'error'); return; }
+
+      const result = await api('/api/widget-templates', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: form.widgetName.value,
+          type: form.widgetType.value,
+          size: form.widgetSize.value,
+          config,
+          bg_color: form.widgetBg.value,
+          text_color: form.widgetText.value,
+          border_radius: parseInt(form.widgetRadius.value) || 8
+        })
+      });
+
+      if (result.success) {
+        showToast('Widget template created');
+        hideModal();
+        await loadWidgetTemplates();
+        render();
+      } else {
+        showToast(result.error || 'Create failed', 'error');
+      }
+    }
+
+    async function deleteWidgetTemplate(id) {
+      if (!confirm('Delete this widget template?')) return;
+      await api('/api/widget-templates/' + id, { method: 'DELETE' });
+      showToast('Template deleted');
+      await loadWidgetTemplates();
+      render();
+    }
+
+    async function pushWidgetToDevices(templateId) {
+      showModal('pushWidget', { template_id: templateId });
+    }
+
+    async function doPushWidget(e) {
+      e.preventDefault();
+      const checkboxes = document.querySelectorAll('.push-widget-cb:checked');
+      const deviceIds = Array.from(checkboxes).map(cb => cb.value);
+      if (deviceIds.length === 0) { showToast('Select at least one device', 'error'); return; }
+
+      const result = await api('/api/widget-templates/push', {
+        method: 'POST',
+        body: JSON.stringify({ template_id: state.modal.data.template_id, device_ids: deviceIds })
+      });
+
+      if (result.success) {
+        const pushed = result.results.filter(r => r.status === 'pushed').length;
+        showToast('Widget pushed to ' + pushed + ' device(s)');
+        hideModal();
+      } else {
+        showToast(result.error || 'Push failed', 'error');
+      }
+    }
+
+    // Metrics helpers
+    async function selectMetricsDevice(deviceId) {
+      state.metricsDevice = deviceId;
+      await loadMetrics(deviceId, state.metricsRange, state.metricsMetric);
+    }
+
+    async function setMetricsRange(range) {
+      state.metricsRange = range;
+      if (state.metricsDevice) await loadMetrics(state.metricsDevice, range, state.metricsMetric);
+    }
+
+    async function setMetricsMetric(metric) {
+      state.metricsMetric = metric;
+      if (state.metricsDevice) await loadMetrics(state.metricsDevice, state.metricsRange, metric);
     }
 
     async function uploadFirmware(e) {
@@ -1586,11 +2323,12 @@ function getDashboardHTML(branding) {
 
     function renderLogin() {
       const b = state.branding;
+      const loginLogoSrc = b.logoData ? 'data:' + (b.logoMime || 'image/png') + ';base64,' + b.logoData : b.logoUrl;
       return \`
         <div class="login-container">
           <div class="login-card">
-            \${b.logoUrl
-              ? '<img src="' + b.logoUrl + '" class="login-logo" alt="Logo">'
+            \${loginLogoSrc
+              ? '<img src="' + loginLogoSrc + '" class="login-logo" alt="Logo">'
               : '<div class="login-logo-placeholder">📺</div>'
             }
             <h1 class="login-title">\${b.companyName}</h1>
@@ -1612,15 +2350,21 @@ function getDashboardHTML(branding) {
 
           <aside class="sidebar \${state.sidebarOpen ? 'open' : ''}">
             <div class="sidebar-header">
-              \${b.logoUrl
-                ? '<img src="' + b.logoUrl + '" class="sidebar-logo" alt="Logo">'
-                : '<div class="sidebar-logo-placeholder">📺</div>'
+              \${b.logoData
+                ? '<img src="data:' + (b.logoMime || 'image/png') + ';base64,' + b.logoData + '" class="sidebar-logo" alt="Logo">'
+                : (b.logoUrl ? '<img src="' + b.logoUrl + '" class="sidebar-logo" alt="Logo">' : '<div class="sidebar-logo-placeholder">📺</div>')
               }
               <span class="sidebar-title">\${b.companyName}</span>
             </div>
             <nav class="sidebar-nav">
               <div class="nav-item \${state.currentPage === 'devices' ? 'active' : ''}" onclick="setPage('devices')">
                 <span class="nav-item-icon">📱</span> Devices
+              </div>
+              <div class="nav-item \${state.currentPage === 'widgets' ? 'active' : ''}" onclick="setPage('widgets')">
+                <span class="nav-item-icon">🧩</span> Widgets
+              </div>
+              <div class="nav-item \${state.currentPage === 'metrics' ? 'active' : ''}" onclick="setPage('metrics')">
+                <span class="nav-item-icon">📊</span> Metrics
               </div>
               <div class="nav-item \${state.currentPage === 'firmware' ? 'active' : ''}" onclick="setPage('firmware')">
                 <span class="nav-item-icon">📦</span> Firmware
@@ -1648,6 +2392,8 @@ function getDashboardHTML(branding) {
 
           <main class="main-content">
             \${state.currentPage === 'devices' ? renderDevicesPage() : ''}
+            \${state.currentPage === 'widgets' ? renderWidgetsPage() : ''}
+            \${state.currentPage === 'metrics' ? renderMetricsPage() : ''}
             \${state.currentPage === 'firmware' ? renderFirmwarePage() : ''}
             \${state.currentPage === 'settings' ? renderSettingsPage() : ''}
           </main>
@@ -1861,61 +2607,331 @@ function getDashboardHTML(branding) {
 
     function renderSettingsPage() {
       const b = state.branding;
+      const tab = state.settingsTab || 'branding';
+      const hasLogoUploaded = !!(b.logoData || state.pendingUploads.logoData);
+      const hasFaviconUploaded = !!(b.faviconData || state.pendingUploads.faviconData);
+      const hasAppleIconUploaded = !!(b.appleTouchIconData || state.pendingUploads.appleTouchIconData);
+      const hasAndroidIconUploaded = !!(b.androidIconData || state.pendingUploads.androidIconData);
+
       return \`
         <div class="page-header">
           <div>
             <h1 class="page-title">Settings</h1>
-            <p class="page-subtitle">Customize your dashboard</p>
+            <p class="page-subtitle">Customize your cloud portal appearance and branding</p>
           </div>
         </div>
 
+        <div class="tab-bar">
+          <div class="tab-item \${tab === 'branding' ? 'active' : ''}" onclick="state.settingsTab='branding';render()">Branding</div>
+          <div class="tab-item \${tab === 'icons' ? 'active' : ''}" onclick="state.settingsTab='icons';render()">App Icons</div>
+          <div class="tab-item \${tab === 'colors' ? 'active' : ''}" onclick="state.settingsTab='colors';render()">Colors & Theme</div>
+        </div>
+
         <form onsubmit="saveBranding(event)">
-          <div class="settings-section">
-            <h3 class="settings-section-title">🎨 Branding</h3>
+          \${tab === 'branding' ? \`
+            <div class="settings-section">
+              <h3 class="settings-section-title">Company Identity</h3>
 
-            <div class="form-group">
-              <label class="form-label">Company Name</label>
-              <input type="text" name="companyName" class="form-input" value="\${b.companyName}" placeholder="Your Company">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">Logo URL</label>
-              <input type="url" name="logoUrl" class="form-input" value="\${b.logoUrl || ''}" placeholder="https://example.com/logo.png">
-              <p class="form-hint">Enter a URL to your company logo (recommended: 80x80px)</p>
-            </div>
-
-            <div class="form-row">
               <div class="form-group">
-                <label class="form-label">Primary Color</label>
-                <div class="color-input-wrapper">
-                  <label class="color-preview" style="background:\${b.primaryColor}" onclick="this.querySelector('input').click()">
-                    <input type="color" name="primaryColor" class="color-input" value="\${b.primaryColor}" onchange="this.parentElement.style.background=this.value">
-                  </label>
-                  <span>\${b.primaryColor}</span>
+                <label class="form-label">Company Name</label>
+                <input type="text" name="companyName" class="form-input" value="\${b.companyName}" placeholder="Your Company">
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Logo Upload</label>
+                <p class="form-hint" style="margin-bottom:0.5rem;">Recommended: 200x200px or larger, PNG or SVG. Displayed in sidebar and login page.</p>
+                \${hasLogoUploaded ? \`
+                  <div class="upload-preview">
+                    <img src="\${state.pendingUploads.logoData ? 'data:' + (state.pendingUploads.logoMime||'image/png') + ';base64,' + state.pendingUploads.logoData : 'data:' + (b.logoMime||'image/png') + ';base64,' + b.logoData}" alt="Logo">
+                    <div class="upload-preview-info">
+                      <div class="upload-preview-name">Current Logo</div>
+                      <div class="upload-preview-size">Uploaded</div>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="clearBrandingAsset('logo')">Remove</button>
+                  </div>
+                \` : ''}
+                <div class="upload-zone" onclick="document.getElementById('logoUpload').click()" id="logoZone">
+                  <div class="upload-zone-icon">🖼️</div>
+                  <div class="upload-zone-text">\${hasLogoUploaded ? 'Replace logo' : 'Click to upload logo'}</div>
+                  <div class="upload-zone-hint">PNG, JPG, SVG - Max 2MB</div>
+                </div>
+                <input type="file" id="logoUpload" accept="image/*" style="display:none" onchange="handleFileUpload('logoUpload','logo',2097152,'logoPreview')">
+                <div id="logoPreview"></div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Logo URL (alternative)</label>
+                <input type="url" name="logoUrl" class="form-input" value="\${b.logoUrl || ''}" placeholder="https://example.com/logo.png">
+                <p class="form-hint">If no file is uploaded, this URL will be used as fallback</p>
+              </div>
+            </div>
+          \` : ''}
+
+          \${tab === 'icons' ? \`
+            <div class="settings-section">
+              <h3 class="settings-section-title">Favicon</h3>
+              <p class="form-hint" style="margin-bottom:0.75rem;">Browser tab icon. Recommended: 32x32px or 64x64px ICO/PNG.</p>
+              \${hasFaviconUploaded ? \`
+                <div class="upload-preview">
+                  <img src="\${state.pendingUploads.faviconData ? 'data:' + (state.pendingUploads.faviconMime||'image/png') + ';base64,' + state.pendingUploads.faviconData : 'data:' + (b.faviconMime||'image/x-icon') + ';base64,' + b.faviconData}" alt="Favicon">
+                  <div class="upload-preview-info">
+                    <div class="upload-preview-name">Current Favicon</div>
+                  </div>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="clearBrandingAsset('favicon')">Remove</button>
+                </div>
+              \` : ''}
+              <div class="upload-zone" onclick="document.getElementById('faviconUpload').click()">
+                <div class="upload-zone-icon">🔖</div>
+                <div class="upload-zone-text">\${hasFaviconUploaded ? 'Replace favicon' : 'Click to upload favicon'}</div>
+                <div class="upload-zone-hint">ICO, PNG - Max 512KB</div>
+              </div>
+              <input type="file" id="faviconUpload" accept="image/*,.ico" style="display:none" onchange="handleFileUpload('faviconUpload','favicon',524288,'faviconPreview')">
+              <div id="faviconPreview"></div>
+            </div>
+
+            <div class="settings-section">
+              <h3 class="settings-section-title">iOS Home Screen Icon</h3>
+              <p class="form-hint" style="margin-bottom:0.75rem;">Apple Touch Icon for "Add to Home Screen" on iOS. Recommended: 180x180px PNG.</p>
+              \${hasAppleIconUploaded ? \`
+                <div class="upload-preview">
+                  <img src="\${state.pendingUploads.appleTouchIconData ? 'data:' + (state.pendingUploads.appleTouchIconMime||'image/png') + ';base64,' + state.pendingUploads.appleTouchIconData : 'data:' + (b.appleTouchIconMime||'image/png') + ';base64,' + b.appleTouchIconData}" alt="Apple Icon">
+                  <div class="upload-preview-info">
+                    <div class="upload-preview-name">iOS Icon (180x180)</div>
+                  </div>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="clearBrandingAsset('appleTouchIcon')">Remove</button>
+                </div>
+              \` : ''}
+              <div class="upload-zone" onclick="document.getElementById('appleIconUpload').click()">
+                <div class="upload-zone-icon">🍎</div>
+                <div class="upload-zone-text">\${hasAppleIconUploaded ? 'Replace iOS icon' : 'Click to upload iOS icon'}</div>
+                <div class="upload-zone-hint">PNG 180x180px - Max 512KB</div>
+              </div>
+              <input type="file" id="appleIconUpload" accept="image/png" style="display:none" onchange="handleFileUpload('appleIconUpload','appleTouchIcon',524288,'appleIconPreview')">
+              <div id="appleIconPreview"></div>
+            </div>
+
+            <div class="settings-section">
+              <h3 class="settings-section-title">Android Home Screen Icon</h3>
+              <p class="form-hint" style="margin-bottom:0.75rem;">Icon for "Add to Home Screen" on Android. Recommended: 192x192px PNG. Also generates a Web App Manifest.</p>
+              \${hasAndroidIconUploaded ? \`
+                <div class="upload-preview">
+                  <img src="\${state.pendingUploads.androidIconData ? 'data:' + (state.pendingUploads.androidIconMime||'image/png') + ';base64,' + state.pendingUploads.androidIconData : 'data:' + (b.androidIconMime||'image/png') + ';base64,' + b.androidIconData}" alt="Android Icon">
+                  <div class="upload-preview-info">
+                    <div class="upload-preview-name">Android Icon (192x192)</div>
+                  </div>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="clearBrandingAsset('androidIcon')">Remove</button>
+                </div>
+              \` : ''}
+              <div class="upload-zone" onclick="document.getElementById('androidIconUpload').click()">
+                <div class="upload-zone-icon">🤖</div>
+                <div class="upload-zone-text">\${hasAndroidIconUploaded ? 'Replace Android icon' : 'Click to upload Android icon'}</div>
+                <div class="upload-zone-hint">PNG 192x192px - Max 512KB</div>
+              </div>
+              <input type="file" id="androidIconUpload" accept="image/png" style="display:none" onchange="handleFileUpload('androidIconUpload','androidIcon',524288,'androidIconPreview')">
+              <div id="androidIconPreview"></div>
+            </div>
+          \` : ''}
+
+          \${tab === 'colors' ? \`
+            <div class="settings-section">
+              <h3 class="settings-section-title">Theme Colors</h3>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Primary Color</label>
+                  <div class="color-input-wrapper">
+                    <label class="color-preview" style="background:\${b.primaryColor}" onclick="this.querySelector('input').click()">
+                      <input type="color" name="primaryColor" class="color-input" value="\${b.primaryColor}" onchange="this.parentElement.style.background=this.value">
+                    </label>
+                    <span>\${b.primaryColor}</span>
+                  </div>
+                  <p class="form-hint">Buttons, links, active states</p>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Accent Color</label>
+                  <div class="color-input-wrapper">
+                    <label class="color-preview" style="background:\${b.accentColor}" onclick="this.querySelector('input').click()">
+                      <input type="color" name="accentColor" class="color-input" value="\${b.accentColor}" onchange="this.parentElement.style.background=this.value">
+                    </label>
+                    <span>\${b.accentColor}</span>
+                  </div>
+                  <p class="form-hint">Gradients, secondary highlights</p>
                 </div>
               </div>
+
               <div class="form-group">
-                <label class="form-label">Accent Color</label>
-                <div class="color-input-wrapper">
-                  <label class="color-preview" style="background:\${b.accentColor}" onclick="this.querySelector('input').click()">
-                    <input type="color" name="accentColor" class="color-input" value="\${b.accentColor}" onchange="this.parentElement.style.background=this.value">
-                  </label>
-                  <span>\${b.accentColor}</span>
-                </div>
+                <label style="display:flex;align-items:center;gap:0.75rem;cursor:pointer;">
+                  <input type="checkbox" name="darkMode" \${b.darkMode ? 'checked' : ''} style="width:18px;height:18px;">
+                  <div>
+                    <div style="font-weight:500;">Dark Mode</div>
+                    <div style="font-size:0.8rem;color:var(--text-muted);">Use dark backgrounds with light text</div>
+                  </div>
+                </label>
               </div>
             </div>
+          \` : ''}
 
-            <div class="form-group">
-              <label style="display:flex;align-items:center;gap:0.75rem;cursor:pointer;">
-                <input type="checkbox" name="darkMode" \${b.darkMode ? 'checked' : ''} style="width:18px;height:18px;">
-                <span>Dark Mode</span>
-              </label>
-            </div>
-          </div>
-
-          <button type="submit" class="btn btn-primary">💾 Save Changes</button>
+          <button type="submit" class="btn btn-primary" style="margin-top:0.5rem;">Save Changes</button>
         </form>
       \`;
+    }
+
+    function renderWidgetsPage() {
+      const widgetTypes = {clock:'🕐',date:'📅',weather:'🌤️',countdown:'⏱️',text:'📝',image:'🖼️',notes:'📋',buttons:'🎮'};
+
+      return \`
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Widget Templates</h1>
+            <p class="page-subtitle">Create widget templates and push them to devices</p>
+          </div>
+          <button class="btn btn-primary" onclick="showModal('createWidget')">+ Create Template</button>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--primary)20;color:var(--primary);">🧩</div>
+            <div class="stat-value">\${state.widgetTemplates.length}</div>
+            <div class="stat-label">Templates</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--accent)20;color:var(--accent);">📱</div>
+            <div class="stat-value">\${state.devices.length}</div>
+            <div class="stat-label">Devices</div>
+          </div>
+        </div>
+
+        \${state.widgetTemplates.length === 0 ? \`
+          <div class="empty-state">
+            <div class="empty-state-icon">🧩</div>
+            <h3>No widget templates</h3>
+            <p>Create widget templates to quickly push standardized widgets to your devices</p>
+            <button class="btn btn-primary" onclick="showModal('createWidget')">+ Create Template</button>
+          </div>
+        \` : \`
+          <div class="widget-tmpl-grid">
+            \${state.widgetTemplates.map(t => \`
+              <div class="widget-tmpl-card">
+                <div class="widget-tmpl-type">\${widgetTypes[t.type] || '📦'} \${t.type}</div>
+                <div class="widget-tmpl-name">\${t.name}</div>
+                <div class="widget-tmpl-preview" style="background:\${t.bg_color};color:\${t.text_color};border-radius:\${t.border_radius}px;">
+                  \${widgetTypes[t.type] || '📦'}
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.75rem;">
+                  Size: \${t.size} · Created by \${t.created_by || 'unknown'}
+                </div>
+                <div class="widget-tmpl-actions">
+                  <button class="btn btn-primary btn-sm" onclick="pushWidgetToDevices('\${t.id}')">Push to Devices</button>
+                  <button class="btn btn-danger btn-sm" onclick="deleteWidgetTemplate('\${t.id}')">Delete</button>
+                </div>
+              </div>
+            \`).join('')}
+          </div>
+        \`}
+      \`;
+    }
+
+    function renderMetricsPage() {
+      const cacheKey = state.metricsDevice + ':' + state.metricsRange + ':' + state.metricsMetric;
+      const data = state.metricsCache[cacheKey] || [];
+      const metricLabels = {cpu_temp:'CPU Temp',memory_pct:'Memory %',cpu_usage:'CPU Usage',hours_online:'Hours Online'};
+      const metricUnits = {cpu_temp:'°C',memory_pct:'%',cpu_usage:'%',hours_online:'hrs'};
+
+      return \`
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Device Metrics</h1>
+            <p class="page-subtitle">Historical data logging and device performance history</p>
+          </div>
+        </div>
+
+        <div class="settings-section" style="margin-bottom:1.5rem;">
+          <h3 class="settings-section-title">Select Device</h3>
+          <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">
+            \${state.devices.length === 0 ? '<p style="color:var(--text-muted);">No devices registered</p>' :
+              state.devices.map(d => \`
+                <button class="btn \${state.metricsDevice === d.id ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="selectMetricsDevice('\${d.id}')">
+                  \${d.name} \${d.status === 'online' ? '🟢' : '🔴'}
+                </button>
+              \`).join('')}
+          </div>
+        </div>
+
+        \${state.metricsDevice ? \`
+          <div class="metric-grid">
+            \${['cpu_temp','memory_pct','cpu_usage','hours_online'].map(m => {
+              const latest = data.length > 0 ? data[data.length - 1] : null;
+              const val = latest ? latest.value : '-';
+              return '<div class="metric-card' + (state.metricsMetric === m ? ' style=\\"border-color:var(--primary);\\"' : '') + '" onclick="setMetricsMetric(\\'' + m + '\\')" style="cursor:pointer;' + (state.metricsMetric === m ? 'border-color:var(--primary);' : '') + '">' +
+                '<div class="metric-value">' + (m === state.metricsMetric && val !== '-' ? val + (metricUnits[m] || '') : '-') + '</div>' +
+                '<div class="metric-label">' + metricLabels[m] + '</div></div>';
+            }).join('')}
+          </div>
+
+          <div class="chart-container">
+            <div class="chart-header">
+              <div class="chart-title">\${metricLabels[state.metricsMetric] || state.metricsMetric} History</div>
+              <div class="chart-controls">
+                <button class="\${state.metricsRange === '24h' ? 'active' : ''}" onclick="setMetricsRange('24h')">24h</button>
+                <button class="\${state.metricsRange === '7d' ? 'active' : ''}" onclick="setMetricsRange('7d')">7d</button>
+                <button class="\${state.metricsRange === '30d' ? 'active' : ''}" onclick="setMetricsRange('30d')">30d</button>
+              </div>
+            </div>
+            \${data.length === 0 ? '<div class="chart-empty">No metrics data yet. Devices report metrics automatically during heartbeats.</div>' : renderChart(data, state.metricsMetric)}
+          </div>
+        \` : \`
+          <div class="empty-state">
+            <div class="empty-state-icon">📊</div>
+            <h3>Select a device</h3>
+            <p>Choose a device above to view its historical metrics and performance data</p>
+          </div>
+        \`}
+      \`;
+    }
+
+    function renderChart(data, metric) {
+      if (!data || data.length === 0) return '<div class="chart-empty">No data</div>';
+
+      const values = data.map(d => d.value);
+      const max = Math.max(...values) * 1.15 || 1;
+      const min = Math.min(0, ...values);
+      const range = max - min || 1;
+      const w = 800, h = 180, pad = 40;
+      const stepX = (w - pad * 2) / Math.max(data.length - 1, 1);
+
+      const points = data.map((d, i) => {
+        const x = pad + i * stepX;
+        const y = h - pad - ((d.value - min) / range) * (h - pad * 2);
+        return x + ',' + y;
+      }).join(' ');
+
+      const area = pad + ',' + (h - pad) + ' ' + points + ' ' + (pad + (data.length - 1) * stepX) + ',' + (h - pad);
+
+      // Axis labels
+      const yLabels = [0, 1, 2, 3].map(i => {
+        const val = min + (range * (3 - i) / 3);
+        const y = pad + i * ((h - pad * 2) / 3);
+        return '<text x="' + (pad - 8) + '" y="' + (y + 4) + '" text-anchor="end" fill="var(--text-muted)" font-size="10">' + Math.round(val) + '</text>' +
+               '<line x1="' + pad + '" y1="' + y + '" x2="' + (w - pad) + '" y2="' + y + '" stroke="var(--border)" stroke-dasharray="4" />';
+      }).join('');
+
+      const xLabels = data.filter((_, i) => data.length <= 10 || i % Math.ceil(data.length / 8) === 0).map((d, i, arr) => {
+        const idx = data.indexOf(d);
+        const x = pad + idx * stepX;
+        const label = d.timestamp.length > 10 ? d.timestamp.substring(11, 16) : d.timestamp.substring(5, 10);
+        return '<text x="' + x + '" y="' + (h - 8) + '" text-anchor="middle" fill="var(--text-muted)" font-size="10">' + label + '</text>';
+      }).join('');
+
+      return '<svg class="chart-svg" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
+        yLabels + xLabels +
+        '<polygon points="' + area + '" fill="var(--primary)" opacity="0.1" />' +
+        '<polyline points="' + points + '" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linejoin="round" />' +
+        data.map((d, i) => {
+          const x = pad + i * stepX;
+          const y = h - pad - ((d.value - min) / range) * (h - pad * 2);
+          return '<circle cx="' + x + '" cy="' + y + '" r="3" fill="var(--primary)" />';
+        }).join('') +
+        '</svg>';
     }
 
     function renderModal() {
@@ -2001,6 +3017,96 @@ function getDashboardHTML(branding) {
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" onclick="hideModal()">Cancel</button>
               <button type="submit" class="btn btn-primary">⬆️ Upload</button>
+            </div>
+          </form>
+        \`;
+      } else if (m.type === 'createWidget') {
+        content = \`
+          <div class="modal-header">
+            <h2 class="modal-title">Create Widget Template</h2>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
+          </div>
+          <form onsubmit="createWidgetTemplate(event)">
+            <div class="modal-body">
+              <div class="form-group">
+                <label class="form-label">Widget Name</label>
+                <input type="text" name="widgetName" class="form-input" placeholder="e.g., Office Clock" required autofocus>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Widget Type</label>
+                <select name="widgetType" class="form-select">
+                  <option value="clock">🕐 Clock</option>
+                  <option value="date">📅 Date</option>
+                  <option value="weather">🌤️ Weather</option>
+                  <option value="countdown">⏱️ Countdown</option>
+                  <option value="text">📝 Text/HTML</option>
+                  <option value="image">🖼️ Image</option>
+                  <option value="notes">📋 Notes</option>
+                  <option value="buttons">🎮 Command Buttons</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Size</label>
+                <select name="widgetSize" class="form-select">
+                  <option value="small">Small</option>
+                  <option value="medium" selected>Medium</option>
+                  <option value="large">Large</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Background Color</label>
+                  <input type="color" name="widgetBg" value="#141416" class="form-input" style="height:44px;padding:4px;">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Text Color</label>
+                  <input type="color" name="widgetText" value="#e8e8e8" class="form-input" style="height:44px;padding:4px;">
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Border Radius (px)</label>
+                <input type="number" name="widgetRadius" value="8" min="0" max="24" class="form-input">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Configuration (JSON)</label>
+                <textarea name="widgetConfig" class="form-textarea" style="min-height:100px;" placeholder='{"format":"24h"}'>{}</textarea>
+                <p class="form-hint">Type-specific config. E.g., clock: {"format":"24h"}, weather: {"latitude":30.2,"longitude":-97.7}</p>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="hideModal()">Cancel</button>
+              <button type="submit" class="btn btn-primary">Create Template</button>
+            </div>
+          </form>
+        \`;
+      } else if (m.type === 'pushWidget') {
+        content = \`
+          <div class="modal-header">
+            <h2 class="modal-title">Push Widget to Devices</h2>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
+          </div>
+          <form onsubmit="doPushWidget(event)">
+            <div class="modal-body">
+              \${state.devices.length === 0 ? \`
+                <p style="color:var(--text-secondary);">No devices registered.</p>
+              \` : \`
+                <p style="color:var(--text-secondary);margin-bottom:1rem;">Select devices to receive this widget:</p>
+                <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                  \${state.devices.map(d => \`
+                    <label style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;">
+                      <input type="checkbox" class="push-widget-cb" value="\${d.id}" checked style="width:18px;height:18px;">
+                      <div>
+                        <div style="font-weight:500;">\${d.name}</div>
+                        <div style="font-size:0.8rem;color:var(--text-muted);">\${d.status === 'online' ? 'Online' : 'Offline'} · v\${d.version}</div>
+                      </div>
+                    </label>
+                  \`).join('')}
+                </div>
+              \`}
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="hideModal()">Cancel</button>
+              \${state.devices.length > 0 ? '<button type="submit" class="btn btn-primary">Push Widget</button>' : ''}
             </div>
           </form>
         \`;

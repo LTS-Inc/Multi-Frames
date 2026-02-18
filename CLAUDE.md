@@ -7,7 +7,7 @@ This document provides context for AI assistants working on the Multi-Frames cod
 **Multi-Frames** is a zero-dependency Python web server for displaying configurable iFrames and dashboard widgets. Designed for home dashboards, kiosks, digital signage, and Raspberry Pi deployments.
 
 - **Author**: Marco Longoria, LTS, Inc.
-- **Version**: 1.2.8
+- **Version**: 1.3.0
 - **License**: MIT
 - **Python**: 3.6+
 
@@ -129,6 +129,10 @@ python -m multi_frames --port 8080
 - Google Workspace authentication
 - Config push/pull to 50+ devices
 - Real-time device status
+- Portal branding: logo, favicon, iOS/Android icon uploads
+- Widget template management and push-to-devices
+- Historical metrics logging with 24h/7d/30d chart views
+- Device performance tracking (CPU, memory, disk, uptime)
 
 ### 5. Raspberry Pi Integration
 - Auto-detection of Pi hardware
@@ -224,4 +228,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.2.8** (2026-02-14)
+Current: **v1.3.0** (2026-02-18)

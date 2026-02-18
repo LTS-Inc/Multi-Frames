@@ -5,6 +5,64 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-02-18
+
+### Added
+- **Cloud Portal Customization**: Full branding customization from within the cloud portal
+  - Logo upload with base64 storage (recommended 200x200px+, max 2MB)
+  - Logo displayed in sidebar header, login page, and mobile header
+  - Fallback to URL-based logo if no file uploaded
+- **iOS Home Screen Icon**: Upload Apple Touch Icon (180x180px PNG) for cloud portal
+  - Enables "Add to Home Screen" on iOS with custom icon
+  - Served via `/api/branding/apple-touch-icon`
+- **Android Home Screen Icon**: Upload Android icon (192x192px PNG) for cloud portal
+  - Auto-generates Web App Manifest for "Add to Home Screen"
+  - Served via `/api/branding/android-icon`
+- **Favicon Upload**: Custom browser tab icon for cloud portal
+  - Supports ICO and PNG formats (max 512KB)
+  - Served via `/api/branding/favicon`
+- **Widget Template Management**: Create and manage widget templates from cloud portal
+  - New "Widgets" page in cloud dashboard sidebar
+  - Create templates for all 8 widget types (clock, date, weather, countdown, text, image, notes, buttons)
+  - Configure size, colors, border radius, and type-specific JSON config
+  - Push widget templates to selected devices (adds widget to device config)
+  - `POST /api/widget-templates` - Create template
+  - `PUT /api/widget-templates/{id}` - Update template
+  - `DELETE /api/widget-templates/{id}` - Delete template
+  - `POST /api/widget-templates/push` - Push template to devices
+- **Historical Metrics Logging**: Device performance data tracking and visualization
+  - New "Metrics" page in cloud dashboard with device selector
+  - Devices auto-report metrics every 5 minutes (CPU temp, memory, disk, uptime, CPU usage)
+  - Hourly data stored with 30-day retention (max 60 entries/hour)
+  - Daily summaries with 90-day retention (avg/max temp, memory %, CPU %, hours online)
+  - SVG-based responsive chart with 24h/7d/30d range selector
+  - Metric selector: CPU Temp, Memory %, CPU Usage, Hours Online
+  - `POST /api/metrics/record` - Device records metrics (device key auth)
+  - `GET /api/metrics/{deviceId}?range=24h&metric=cpu_temp` - Query metrics (user auth)
+  - `GET /api/metrics/{deviceId}/latest` - Get latest metrics (user auth)
+- **Expanded Settings Page**: Tabbed interface with Branding, App Icons, and Colors & Theme sections
+  - Drag-and-drop style upload zones for all image assets
+  - Live preview of uploaded images with remove option
+  - Color pickers with descriptive hints
+  - Dark mode toggle with description
+
+### Changed
+- Cloud portal branding model expanded: `logoData`, `logoMime`, `faviconData`, `faviconMime`, `appleTouchIconData`, `appleTouchIconMime`, `androidIconData`, `androidIconMime`
+- Cloud portal now includes `<meta>` tags for mobile web app support (iOS and Android)
+- Cloud dashboard sidebar now includes Widgets and Metrics navigation items
+- Settings page redesigned with tab navigation (Branding / App Icons / Colors & Theme)
+- CloudAgent now sends device metrics every 5 heartbeats (5 minutes) to cloud
+- CloudAgent background thread tracks metrics reporting cycle
+- Branding PUT endpoint preserves existing fields when not provided in request
+
+### Technical
+- `CloudAgent._send_metrics()` method for periodic metric reporting
+- `/api/branding/logo`, `/api/branding/favicon`, `/api/branding/apple-touch-icon`, `/api/branding/android-icon` serve binary assets
+- Metrics use KV key format: `metrics:{deviceId}:{hourKey}` with TTL-based expiration
+- Daily summaries use rolling average calculation for temperature, memory, and CPU
+- Upload size validation: logos max 2MB, icons max 512KB
+- SVG chart rendering with area fill, grid lines, axis labels, and data point circles
+
 ## [1.2.8] - 2026-02-14
 
 ### Fixed

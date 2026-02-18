@@ -24,8 +24,8 @@ The main server file (~10,000 lines) contains all functionality in a single depl
 ### Constants (Lines 196-200)
 
 ```python
-VERSION = "1.2.8"           # Current version
-VERSION_DATE = "2026-02-14" # Release date
+VERSION = "1.3.0"           # Current version
+VERSION_DATE = "2026-02-18" # Release date
 DEFAULT_PORT = 8080         # Default HTTP port
 DEFAULT_HOST = "0.0.0.0"    # Listen on all interfaces
 ```
@@ -446,11 +446,34 @@ router.get('/api/config/pull', pullConfig);
 router.post('/api/config/push', pushConfig);
 router.get('/api/config/:id', getDeviceConfig);
 router.put('/api/config/:id', updateDeviceConfig);
+router.post('/api/config/:id/request', requestConfigRefresh);
 router.post('/api/config/bulk-push', bulkPushConfig);
 
-// Branding
+// Firmware
+router.get('/api/firmware', getFirmwareMetadata);
+router.post('/api/firmware/upload', uploadFirmware);
+router.get('/api/firmware/download', downloadFirmware);
+router.post('/api/firmware/deploy', deployFirmware);
+
+// Branding & Assets
 router.get('/api/branding', getBranding);
-router.put('/api/branding', updateBranding);
+router.put('/api/branding', updateBranding);  // Supports logo/icon base64 uploads
+router.get('/api/branding/logo', serveLogo);
+router.get('/api/branding/favicon', serveFavicon);
+router.get('/api/branding/apple-touch-icon', serveAppleTouchIcon);
+router.get('/api/branding/android-icon', serveAndroidIcon);
+
+// Widget Templates (v1.3.0)
+router.get('/api/widget-templates', listWidgetTemplates);
+router.post('/api/widget-templates', createWidgetTemplate);
+router.put('/api/widget-templates/:id', updateWidgetTemplate);
+router.delete('/api/widget-templates/:id', deleteWidgetTemplate);
+router.post('/api/widget-templates/push', pushWidgetToDevices);
+
+// Metrics / Historical Data (v1.3.0)
+router.post('/api/metrics/record', recordMetrics);     // Device auth
+router.get('/api/metrics/:id', queryMetrics);           // User auth
+router.get('/api/metrics/:id/latest', getLatestMetrics); // User auth
 
 // Dashboard
 router.get('/', serveDashboard);
@@ -467,7 +490,7 @@ router.get('/', serveDashboard);
   "last_seen": "2026-02-05T14:22:00Z",
   "status": "online",  // online, offline, unknown
   "info": {
-    "version": "1.2.8",
+    "version": "1.3.0",
     "ip": "192.168.1.100",
     "hostname": "raspberrypi",
     "temperature": 45.2,
@@ -476,7 +499,77 @@ router.get('/', serveDashboard);
     "uptime": 86400
   },
   "config_version": 5,
-  "pending_config": false
+  "pending_config": false,
+  "firmware_pending": false,
+  "firmware_target_version": "1.3.0"
+}
+```
+
+### Branding Object Schema (v1.3.0)
+
+```javascript
+{
+  "companyName": "Multi-Frames",
+  "logoUrl": "",              // Fallback URL
+  "logoData": "",             // Base64 encoded logo
+  "logoMime": "image/png",
+  "faviconData": "",          // Base64 favicon
+  "faviconMime": "image/x-icon",
+  "appleTouchIconData": "",   // Base64 iOS icon (180x180)
+  "appleTouchIconMime": "image/png",
+  "androidIconData": "",      // Base64 Android icon (192x192)
+  "androidIconMime": "image/png",
+  "primaryColor": "#3b82f6",
+  "accentColor": "#8b5cf6",
+  "darkMode": true
+}
+```
+
+### Widget Template Schema (v1.3.0)
+
+```javascript
+{
+  "id": "uuid",
+  "name": "Office Clock",
+  "type": "clock",           // clock, date, weather, countdown, text, image, notes, buttons
+  "size": "medium",          // small, medium, large
+  "config": {},              // Type-specific configuration
+  "bg_color": "#141416",
+  "text_color": "#e8e8e8",
+  "border_radius": 8,
+  "created_by": "user@company.com",
+  "created_at": "2026-02-18T10:00:00Z"
+}
+```
+
+### Metrics Data Schema (v1.3.0)
+
+```javascript
+// Per-entry (stored in hourly buckets, max 60/hour, 30-day TTL)
+{
+  "timestamp": "2026-02-18T14:30:00Z",
+  "cpu_temp": 45.2,
+  "memory_used": 512,
+  "memory_total": 2048,
+  "disk_used": 12800,
+  "disk_total": 32000,
+  "uptime": 86400,
+  "cpu_usage": 15.3,
+  "network_rx": null,
+  "network_tx": null,
+  "custom": {}
+}
+
+// Daily summary (90-day TTL)
+{
+  "date": "2026-02-18",
+  "data_points": 288,
+  "avg_cpu_temp": 42.5,
+  "max_cpu_temp": 55.0,
+  "avg_memory_pct": 35.2,
+  "avg_cpu_usage": 12.8,
+  "hours_online": 24,
+  "hours": { "0": true, "1": true, ... }
 }
 ```
 

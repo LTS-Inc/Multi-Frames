@@ -9,8 +9,10 @@ Manage multiple Multi-Frames installations remotely with a centralized cloud das
 - **Config Sync**: Push/pull configuration to 50+ devices simultaneously
 - **Firmware Management**: Upload and deploy firmware updates to devices remotely
 - **Real-time Status**: Monitor device health, uptime, and temperature
-- **Branding Customization**: Company name, logo, colors, dark mode
-- **Mobile Friendly**: Hamburger menu and touch-optimized interface
+- **Full Portal Branding**: Logo upload (base64), favicon, iOS/Android home screen icons
+- **Widget Templates**: Create, manage, and push widget templates to devices
+- **Historical Metrics**: CPU temp, memory, disk, CPU usage with 24h/7d/30d charts
+- **Mobile Friendly**: Hamburger menu, touch-optimized uploads, web app manifest
 
 ## Architecture
 
@@ -173,12 +175,34 @@ id = "your-sessions-kv-id"
 | `/api/firmware/download` | GET | Device downloads firmware (device auth) |
 | `/api/firmware/deploy` | POST | Queue firmware for devices (user auth) |
 
-### Branding
+### Branding & Assets
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/branding` | GET | Get dashboard branding settings |
-| `/api/branding` | PUT | Update branding (user auth) |
+| `/api/branding` | PUT | Update branding with logo/icon uploads (user auth) |
+| `/api/branding/logo` | GET | Serve uploaded logo image |
+| `/api/branding/favicon` | GET | Serve uploaded favicon |
+| `/api/branding/apple-touch-icon` | GET | Serve iOS home screen icon |
+| `/api/branding/android-icon` | GET | Serve Android home screen icon |
+
+### Widget Templates
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/widget-templates` | GET | List all widget templates (user auth) |
+| `/api/widget-templates` | POST | Create widget template (user auth) |
+| `/api/widget-templates/{id}` | PUT | Update widget template (user auth) |
+| `/api/widget-templates/{id}` | DELETE | Delete widget template (user auth) |
+| `/api/widget-templates/push` | POST | Push template to devices (user auth) |
+
+### Metrics / Historical Data
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/metrics/record` | POST | Device records metrics (device auth) |
+| `/api/metrics/{deviceId}` | GET | Query device metrics with range/metric params (user auth) |
+| `/api/metrics/{deviceId}/latest` | GET | Get latest metric snapshot (user auth) |
 
 ## Usage
 
@@ -206,23 +230,43 @@ Devices automatically:
 
 ### Customize Branding
 
-Navigate to **Settings** in the dashboard sidebar to customize:
+Navigate to **Settings** in the dashboard sidebar. The settings page has three tabs:
 
-```json
-{
-  "companyName": "Your Company",
-  "logoUrl": "https://example.com/logo.png",
-  "primaryColor": "#3b82f6",
-  "accentColor": "#8b5cf6",
-  "darkMode": true
-}
-```
-
+**Branding Tab:**
 - **Company Name**: Displayed in the header and page title
-- **Logo URL**: Your company logo (optional)
-- **Primary Color**: Main UI color (buttons, links)
-- **Accent Color**: Secondary color for gradients
+- **Logo Upload**: Upload PNG/JPG/SVG logo (max 2MB, recommended 200x200px+)
+- **Logo URL**: Fallback URL if no file uploaded
+
+**App Icons Tab:**
+- **Favicon**: Browser tab icon (ICO/PNG, max 512KB)
+- **iOS Icon**: Apple Touch Icon for "Add to Home Screen" (180x180px PNG)
+- **Android Icon**: Android icon + Web App Manifest (192x192px PNG)
+
+**Colors & Theme Tab:**
+- **Primary Color**: Main UI color (buttons, links, active states)
+- **Accent Color**: Secondary color for gradients and highlights
 - **Dark Mode**: Toggle dark/light theme
+
+### Widget Templates
+
+Navigate to **Widgets** in the sidebar to manage widget templates:
+
+1. Create templates for any of the 8 widget types
+2. Configure colors, size, border radius, and type-specific settings
+3. Push templates to selected devices to add widgets to their dashboards
+
+### Device Metrics
+
+Navigate to **Metrics** in the sidebar to view historical device data:
+
+1. Select a device to view its metrics
+2. Choose a metric: CPU Temp, Memory %, CPU Usage, Hours Online
+3. Select time range: 24 hours, 7 days, or 30 days
+4. Interactive SVG chart shows trends over time
+
+Devices automatically report metrics every 5 minutes. Data is stored with:
+- Hourly granularity: 30-day retention
+- Daily summaries: 90-day retention
 
 ## Security
 

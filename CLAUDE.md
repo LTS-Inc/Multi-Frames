@@ -133,6 +133,8 @@ python -m multi_frames --port 8080
 - Widget template management and push-to-devices
 - Historical metrics logging with 24h/7d/30d chart views
 - Device performance tracking (CPU, memory, disk, uptime)
+- Secure remote tunnels for accessing device webservers
+- Tunnel activity logging with 90-day retention
 
 ### 5. Raspberry Pi Integration
 - Auto-detection of Pi hardware
@@ -228,4 +230,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.3.0** (2026-02-18)
+Current: **v1.4.0** (2026-03-04)

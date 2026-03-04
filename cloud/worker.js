@@ -102,6 +102,32 @@ const DEFAULT_WIDGET_TEMPLATES = [];
 const MAX_LOGO_SIZE = 2 * 1024 * 1024; // 2MB
 const MAX_ICON_SIZE = 512 * 1024; // 512KB
 
+// SSH Tunnel constants
+const TUNNEL_TOKEN_TTL = 300; // 5 minutes for token validity
+const TUNNEL_SESSION_TTL = 3600; // 1 hour max tunnel session
+const TUNNEL_LOG_TTL = 60 * 60 * 24 * 90; // 90-day retention for tunnel logs
+
+// In-memory tunnel registry (per-isolate; Durable Objects would be needed for production scale)
+const activeTunnels = new Map(); // tunnelId -> { deviceWebSocket, adminWebSockets, created, deviceId, deviceName, initiatedBy }
+
+function generateTunnelToken() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let token = 'tun_';
+  for (let i = 0; i < 48; i++) {
+    token += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return token;
+}
+
+function generateTunnelId() {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let id = '';
+  for (let i = 0; i < 16; i++) {
+    id += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return id;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -286,6 +312,12 @@ export default {
           device.config_requested = false;
         }
 
+        // Check for tunnel request and clear it
+        const tunnelRequested = device.tunnel_requested || null;
+        if (tunnelRequested) {
+          device.tunnel_requested = null;
+        }
+
         await env.DEVICES.put(`device:${deviceAuth.id}`, JSON.stringify(device));
 
         const cloudConfig = await env.CONFIGS.get(`config:${deviceAuth.id}`, 'json');
@@ -298,7 +330,8 @@ export default {
           success: true,
           config_update_available: configUpdateAvailable,
           config_version: cloudConfig?.version || 0,
-          config_requested: configRequested
+          config_requested: configRequested,
+          tunnel_requested: tunnelRequested
         };
 
         if (firmwareUpdateAvailable) {
@@ -825,6 +858,391 @@ export default {
         const latest = data.length > 0 ? data[data.length - 1] : null;
 
         return jsonResponse({ device_id: deviceId, latest });
+      }
+
+      // ============== SSH TUNNEL ROUTES ==============
+
+      // Initiate a tunnel session - admin requests tunnel to a device
+      if (path === '/api/tunnel/initiate' && method === 'POST') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const body = await request.json();
+        const { device_id } = body;
+        if (!device_id) return errorResponse('Device ID required', 400);
+
+        const device = await env.DEVICES.get(`device:${device_id}`, 'json');
+        if (!device) return errorResponse('Device not found', 404);
+
+        // Check device is online
+        const lastSeen = new Date(device.last_seen);
+        if (Date.now() - lastSeen.getTime() > 120000) {
+          return errorResponse('Device is offline. Tunnel requires an online device.', 400);
+        }
+
+        // Generate tunnel credentials
+        const tunnelId = generateTunnelId();
+        const tunnelToken = generateTunnelToken();
+
+        // Store tunnel session in KV for device to pick up
+        const tunnelSession = {
+          tunnel_id: tunnelId,
+          tunnel_token: tunnelToken,
+          device_id: device_id,
+          device_name: device.name,
+          initiated_by: user.email,
+          initiated_at: new Date().toISOString(),
+          status: 'pending', // pending -> active -> closed
+          expires_at: new Date(Date.now() + TUNNEL_TOKEN_TTL * 1000).toISOString()
+        };
+
+        await env.CONFIGS.put(`tunnel:${tunnelId}`, JSON.stringify(tunnelSession), {
+          expirationTtl: TUNNEL_SESSION_TTL
+        });
+
+        // Signal the device to establish tunnel by setting flag on device record
+        device.tunnel_requested = {
+          tunnel_id: tunnelId,
+          tunnel_token: tunnelToken,
+          cloud_ws_url: url.origin.replace('http', 'ws') + '/api/tunnel/device-ws/' + tunnelId
+        };
+        await env.DEVICES.put(`device:${device_id}`, JSON.stringify(device));
+
+        // Log tunnel initiation
+        await logTunnelEvent(env, {
+          tunnel_id: tunnelId,
+          device_id: device_id,
+          device_name: device.name,
+          event: 'initiated',
+          initiated_by: user.email,
+          timestamp: new Date().toISOString()
+        });
+
+        return jsonResponse({
+          success: true,
+          tunnel_id: tunnelId,
+          tunnel_token: tunnelToken,
+          message: 'Tunnel initiated. Waiting for device to connect...'
+        });
+      }
+
+      // Check tunnel status
+      if (path.match(/^\/api\/tunnel\/[\w]+\/status$/) && method === 'GET') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const tunnelId = path.split('/')[3];
+        const session = await env.CONFIGS.get(`tunnel:${tunnelId}`, 'json');
+        if (!session) return errorResponse('Tunnel not found or expired', 404);
+
+        // Check if tunnel is active in memory
+        const tunnel = activeTunnels.get(tunnelId);
+        if (tunnel) {
+          session.status = 'active';
+        } else if (session.status === 'pending') {
+          // Check if expired
+          if (new Date(session.expires_at) < new Date()) {
+            session.status = 'expired';
+          }
+        }
+
+        return jsonResponse({ tunnel: session });
+      }
+
+      // Close a tunnel
+      if (path.match(/^\/api\/tunnel\/[\w]+\/close$/) && method === 'POST') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const tunnelId = path.split('/')[3];
+        const session = await env.CONFIGS.get(`tunnel:${tunnelId}`, 'json');
+
+        // Close active tunnel
+        const tunnel = activeTunnels.get(tunnelId);
+        if (tunnel) {
+          try { tunnel.deviceWebSocket.close(1000, 'Tunnel closed by admin'); } catch(e) {}
+          for (const ws of (tunnel.adminWebSockets || [])) {
+            try { ws.close(1000, 'Tunnel closed by admin'); } catch(e) {}
+          }
+          activeTunnels.delete(tunnelId);
+        }
+
+        if (session) {
+          session.status = 'closed';
+          session.closed_at = new Date().toISOString();
+          session.closed_by = user.email;
+          await env.CONFIGS.put(`tunnel:${tunnelId}`, JSON.stringify(session), {
+            expirationTtl: TUNNEL_LOG_TTL
+          });
+
+          await logTunnelEvent(env, {
+            tunnel_id: tunnelId,
+            device_id: session.device_id,
+            device_name: session.device_name,
+            event: 'closed',
+            closed_by: user.email,
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        return jsonResponse({ success: true, message: 'Tunnel closed' });
+      }
+
+      // Get tunnel logs
+      if (path === '/api/tunnel/logs' && method === 'GET') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const limit = parseInt(url.searchParams.get('limit') || '50');
+        const deviceFilter = url.searchParams.get('device_id') || null;
+
+        // Get recent tunnel logs
+        const logIndex = await env.CONFIGS.get('tunnel_log_index', 'json') || [];
+        let logs = [];
+        for (const logKey of logIndex.slice(-limit * 2)) {
+          const log = await env.CONFIGS.get(logKey, 'json');
+          if (log) {
+            if (!deviceFilter || log.device_id === deviceFilter) {
+              logs.push(log);
+            }
+          }
+        }
+
+        // Sort newest first and apply limit
+        logs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        logs = logs.slice(0, limit);
+
+        return jsonResponse({ logs });
+      }
+
+      // Get active tunnels list
+      if (path === '/api/tunnel/active' && method === 'GET') {
+        const user = await verifyAuth(request, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        const tunnels = [];
+        for (const [id, tunnel] of activeTunnels) {
+          tunnels.push({
+            tunnel_id: id,
+            device_id: tunnel.deviceId,
+            device_name: tunnel.deviceName,
+            initiated_by: tunnel.initiatedBy,
+            created: tunnel.created,
+            admin_connections: (tunnel.adminWebSockets || []).length
+          });
+        }
+
+        return jsonResponse({ tunnels });
+      }
+
+      // Device WebSocket endpoint - device connects here to establish tunnel
+      if (path.match(/^\/api\/tunnel\/device-ws\/[\w]+$/) && request.headers.get('Upgrade') === 'websocket') {
+        const tunnelId = path.split('/').pop();
+        const tunnelToken = url.searchParams.get('token');
+
+        // Validate tunnel session
+        const session = await env.CONFIGS.get(`tunnel:${tunnelId}`, 'json');
+        if (!session) {
+          return new Response('Tunnel not found', { status: 404 });
+        }
+        if (session.tunnel_token !== tunnelToken) {
+          return new Response('Invalid tunnel token', { status: 403 });
+        }
+        if (new Date(session.expires_at) < new Date() && session.status === 'pending') {
+          return new Response('Tunnel token expired', { status: 403 });
+        }
+
+        // Verify device key from query params
+        const deviceKey = url.searchParams.get('device_key');
+        if (deviceKey) {
+          const deviceAuth = await env.DEVICES.get(`key:${deviceKey}`, 'json');
+          if (!deviceAuth || deviceAuth.id !== session.device_id) {
+            return new Response('Device key mismatch', { status: 403 });
+          }
+        }
+
+        // Upgrade to WebSocket
+        const pair = new WebSocketPair();
+        const [client, server] = Object.values(pair);
+
+        server.accept();
+
+        // Register tunnel as active
+        const tunnelData = {
+          deviceWebSocket: server,
+          adminWebSockets: [],
+          deviceId: session.device_id,
+          deviceName: session.device_name,
+          initiatedBy: session.initiated_by,
+          created: new Date().toISOString(),
+          pendingRequests: new Map()
+        };
+        activeTunnels.set(tunnelId, tunnelData);
+
+        // Update session status
+        session.status = 'active';
+        session.connected_at = new Date().toISOString();
+        await env.CONFIGS.put(`tunnel:${tunnelId}`, JSON.stringify(session), {
+          expirationTtl: TUNNEL_SESSION_TTL
+        });
+
+        await logTunnelEvent(env, {
+          tunnel_id: tunnelId,
+          device_id: session.device_id,
+          device_name: session.device_name,
+          event: 'device_connected',
+          timestamp: new Date().toISOString()
+        });
+
+        server.addEventListener('message', (event) => {
+          // Forward responses from device to requesting admin WebSockets
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'http_response') {
+              const tunnel = activeTunnels.get(tunnelId);
+              if (tunnel) {
+                for (const adminWs of tunnel.adminWebSockets) {
+                  try { adminWs.send(event.data); } catch(e) {}
+                }
+              }
+            }
+          } catch(e) {}
+        });
+
+        server.addEventListener('close', () => {
+          const tunnel = activeTunnels.get(tunnelId);
+          if (tunnel) {
+            for (const ws of tunnel.adminWebSockets) {
+              try { ws.send(JSON.stringify({ type: 'tunnel_closed', reason: 'Device disconnected' })); } catch(e) {}
+              try { ws.close(1000, 'Device disconnected'); } catch(e) {}
+            }
+            activeTunnels.delete(tunnelId);
+          }
+        });
+
+        return new Response(null, { status: 101, webSocket: client });
+      }
+
+      // Admin WebSocket endpoint - admin connects here to use the tunnel
+      if (path.match(/^\/api\/tunnel\/admin-ws\/[\w]+$/) && request.headers.get('Upgrade') === 'websocket') {
+        const tunnelId = path.split('/').pop();
+        const token = url.searchParams.get('token');
+
+        // Verify admin auth via token
+        if (!token) return new Response('Unauthorized', { status: 401 });
+        const user = await verifyToken(token, env);
+        if (!user) return new Response('Unauthorized', { status: 401 });
+
+        // Check tunnel exists and is active
+        const tunnel = activeTunnels.get(tunnelId);
+        if (!tunnel) {
+          return new Response('Tunnel not active', { status: 404 });
+        }
+
+        // Upgrade to WebSocket
+        const pair = new WebSocketPair();
+        const [client, server] = Object.values(pair);
+
+        server.accept();
+
+        tunnel.adminWebSockets.push(server);
+
+        await logTunnelEvent(env, {
+          tunnel_id: tunnelId,
+          device_id: tunnel.deviceId,
+          device_name: tunnel.deviceName,
+          event: 'admin_connected',
+          admin_email: user.email,
+          timestamp: new Date().toISOString()
+        });
+
+        server.addEventListener('message', (event) => {
+          // Forward HTTP requests from admin to device
+          try {
+            if (tunnel.deviceWebSocket.readyState === 1) {
+              tunnel.deviceWebSocket.send(event.data);
+            }
+          } catch(e) {}
+        });
+
+        server.addEventListener('close', () => {
+          const idx = tunnel.adminWebSockets.indexOf(server);
+          if (idx !== -1) tunnel.adminWebSockets.splice(idx, 1);
+        });
+
+        return new Response(null, { status: 101, webSocket: client });
+      }
+
+      // Proxy HTTP request through tunnel (for iframe embedding)
+      if (path.match(/^\/api\/tunnel\/proxy\/[\w]+/) && method === 'GET') {
+        const parts = path.split('/');
+        const tunnelId = parts[4];
+        const token = url.searchParams.get('token');
+
+        // Verify admin auth
+        if (!token) return errorResponse('Unauthorized', 401);
+        const user = await verifyToken(token, env);
+        if (!user) return errorResponse('Unauthorized', 401);
+
+        // Check tunnel exists
+        const tunnel = activeTunnels.get(tunnelId);
+        if (!tunnel) {
+          return new Response(getTunnelDisconnectedHTML(), {
+            headers: { 'Content-Type': 'text/html' }
+          });
+        }
+
+        // Build proxy path (everything after /api/tunnel/proxy/{tunnelId})
+        const proxyPath = '/' + parts.slice(5).join('/') + url.search;
+
+        // Send request through WebSocket to device and wait for response
+        const requestId = generateTunnelId();
+        const requestPromise = new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Request timeout'));
+          }, 30000);
+
+          // Listen for response from device
+          const handler = (event) => {
+            try {
+              const msg = JSON.parse(event.data);
+              if (msg.type === 'http_response' && msg.request_id === requestId) {
+                clearTimeout(timeout);
+                tunnel.deviceWebSocket.removeEventListener('message', handler);
+                resolve(msg);
+              }
+            } catch(e) {}
+          };
+
+          tunnel.deviceWebSocket.addEventListener('message', handler);
+
+          // Send request to device
+          tunnel.deviceWebSocket.send(JSON.stringify({
+            type: 'http_request',
+            request_id: requestId,
+            method: 'GET',
+            path: proxyPath,
+            headers: { 'Accept': request.headers.get('Accept') || '*/*' }
+          }));
+        });
+
+        try {
+          const response = await requestPromise;
+          const headers = {
+            'Content-Type': response.content_type || 'text/html',
+            ...CORS_HEADERS
+          };
+          let body = response.body || '';
+          if (response.body_base64) {
+            body = Uint8Array.from(atob(response.body_base64), c => c.charCodeAt(0));
+          }
+          return new Response(body, { status: response.status || 200, headers });
+        } catch (e) {
+          return new Response('<html><body style="background:#0a0a0b;color:#e8e8e8;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>Request Timeout</h2><p>The device did not respond in time.</p></div></body></html>', {
+            status: 504,
+            headers: { 'Content-Type': 'text/html' }
+          });
+        }
       }
 
       // ============== BRANDING ASSET ROUTES ==============
@@ -1877,6 +2295,132 @@ function getDashboardHTML(branding) {
     .metric-trend.down { color: var(--success); }
     .metric-trend.stable { color: var(--text-muted); }
 
+    /* Tunnel styles */
+    .btn-tunnel {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      border: none;
+    }
+    .btn-tunnel:hover {
+      background: linear-gradient(135deg, #059669, #047857);
+      transform: translateY(-1px);
+    }
+    .btn-tunnel:disabled {
+      background: var(--bg-tertiary);
+      color: var(--text-muted);
+      cursor: not-allowed;
+      transform: none;
+    }
+    .tunnel-frame-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      margin-top: 1rem;
+    }
+    .tunnel-frame-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.75rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-tertiary);
+    }
+    .tunnel-frame-header .tunnel-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+    .tunnel-status-active {
+      color: var(--success);
+    }
+    .tunnel-status-connecting {
+      color: var(--warning);
+    }
+    .tunnel-status-closed {
+      color: var(--error);
+    }
+    .tunnel-frame {
+      width: 100%;
+      height: 70vh;
+      border: none;
+      background: #000;
+    }
+    .tunnel-log-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .tunnel-log-table th, .tunnel-log-table td {
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+    .tunnel-log-table th {
+      color: var(--text-muted);
+      font-weight: 500;
+      text-transform: uppercase;
+      font-size: 0.7rem;
+      letter-spacing: 0.5px;
+    }
+    .tunnel-log-table tr:hover {
+      background: var(--bg-tertiary);
+    }
+    .tunnel-event-badge {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+    .tunnel-event-initiated { background: var(--primary)20; color: var(--primary); }
+    .tunnel-event-device_connected { background: var(--success)20; color: var(--success); }
+    .tunnel-event-admin_connected { background: var(--accent)20; color: var(--accent); }
+    .tunnel-event-closed { background: var(--error)20; color: var(--error); }
+    .tunnel-active-card {
+      background: var(--bg-card);
+      border: 1px solid var(--success);
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .tunnel-active-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .tunnel-active-device {
+      font-weight: 600;
+      font-size: 1rem;
+    }
+    .tunnel-active-meta {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .tunnel-connecting-overlay {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 4rem 2rem;
+      text-align: center;
+      gap: 1rem;
+    }
+    .tunnel-connecting-overlay .spinner-lg {
+      width: 48px;
+      height: 48px;
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
     /* Responsive adjustments for new sections */
     @media (max-width: 768px) {
       .chart-svg { height: 150px; }
@@ -1885,10 +2429,16 @@ function getDashboardHTML(branding) {
       .upload-zone { padding: 1rem; }
       .tab-bar { gap: 0; }
       .tab-item { padding: 0.625rem 0.75rem; font-size: 0.8rem; }
+      .tunnel-frame { height: 50vh; }
+      .tunnel-log-table th:nth-child(4), .tunnel-log-table td:nth-child(4) { display: none; }
+      .tunnel-active-card { flex-direction: column; align-items: flex-start; }
+      .device-actions { flex-wrap: wrap; }
     }
     @media (max-width: 480px) {
       .metric-grid { grid-template-columns: 1fr 1fr; }
       .chart-header { flex-direction: column; align-items: flex-start; }
+      .tunnel-frame { height: 40vh; }
+      .tunnel-log-table th:nth-child(3), .tunnel-log-table td:nth-child(3) { display: none; }
     }
   </style>
 </head>
@@ -1912,7 +2462,11 @@ function getDashboardHTML(branding) {
       settingsTab: 'branding',
       modal: null,
       sidebarOpen: false,
-      pendingUploads: {}
+      pendingUploads: {},
+      tunnelLogs: [],
+      activeTunnels: [],
+      currentTunnel: null, // { tunnelId, deviceId, deviceName, status, ws }
+      tunnelLogsLoaded: false
     };
 
     // Init
@@ -2068,6 +2622,9 @@ function getDashboardHTML(branding) {
     function setPage(page) {
       state.currentPage = page;
       state.sidebarOpen = false;
+      if (page === 'tunnels') {
+        state.tunnelLogsLoaded = false; // force reload
+      }
       render();
     }
 
@@ -2311,6 +2868,160 @@ function getDashboardHTML(branding) {
       }
     }
 
+    // ============== TUNNEL FUNCTIONS ==============
+
+    async function initiateTunnel(deviceId, deviceName) {
+      const device = state.devices.find(d => d.id === deviceId);
+      if (!device || device.status !== 'online') {
+        showToast('Device must be online to connect', 'error');
+        return;
+      }
+
+      showToast('Initiating secure tunnel to ' + deviceName + '...');
+
+      const result = await api('/api/tunnel/initiate', {
+        method: 'POST',
+        body: JSON.stringify({ device_id: deviceId })
+      });
+
+      if (!result.success) {
+        showToast(result.error || 'Failed to initiate tunnel', 'error');
+        return;
+      }
+
+      // Set current tunnel state
+      state.currentTunnel = {
+        tunnelId: result.tunnel_id,
+        tunnelToken: result.tunnel_token,
+        deviceId: deviceId,
+        deviceName: deviceName,
+        status: 'connecting',
+        startTime: new Date().toISOString()
+      };
+
+      // Switch to tunnels page
+      state.currentPage = 'tunnels';
+      state.sidebarOpen = false;
+      render();
+
+      // Poll for device connection
+      pollTunnelStatus(result.tunnel_id);
+    }
+
+    async function pollTunnelStatus(tunnelId) {
+      let attempts = 0;
+      const maxAttempts = 60; // 60 seconds max wait
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        if (!state.currentTunnel || state.currentTunnel.tunnelId !== tunnelId) {
+          clearInterval(pollInterval);
+          return;
+        }
+
+        try {
+          const result = await api('/api/tunnel/' + tunnelId + '/status');
+          if (result.tunnel && result.tunnel.status === 'active') {
+            clearInterval(pollInterval);
+            state.currentTunnel.status = 'active';
+            showToast('Tunnel connected! Loading device webserver...');
+            render();
+            // Connect admin WebSocket for live updates
+            connectAdminWebSocket(tunnelId);
+          } else if (result.tunnel && result.tunnel.status === 'expired') {
+            clearInterval(pollInterval);
+            state.currentTunnel.status = 'expired';
+            showToast('Tunnel request expired. Device did not connect in time.', 'error');
+            render();
+          }
+        } catch(e) {}
+
+        if (attempts >= maxAttempts) {
+          clearInterval(pollInterval);
+          if (state.currentTunnel && state.currentTunnel.status === 'connecting') {
+            state.currentTunnel.status = 'timeout';
+            showToast('Tunnel connection timed out', 'error');
+            render();
+          }
+        }
+      }, 1000);
+    }
+
+    function connectAdminWebSocket(tunnelId) {
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = wsProtocol + '//' + window.location.host + '/api/tunnel/admin-ws/' + tunnelId + '?token=' + encodeURIComponent(state.token);
+
+      try {
+        const ws = new WebSocket(wsUrl);
+        if (state.currentTunnel) {
+          state.currentTunnel.ws = ws;
+        }
+
+        ws.onopen = () => {
+          console.log('Admin WebSocket connected to tunnel');
+        };
+
+        ws.onmessage = (event) => {
+          // Handle messages from device
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'tunnel_closed') {
+              showToast('Tunnel closed: ' + (msg.reason || 'Unknown reason'), 'error');
+              if (state.currentTunnel) {
+                state.currentTunnel.status = 'closed';
+                render();
+              }
+            }
+          } catch(e) {}
+        };
+
+        ws.onclose = () => {
+          console.log('Admin WebSocket disconnected');
+        };
+      } catch(e) {
+        console.error('Admin WebSocket error:', e);
+      }
+    }
+
+    async function closeTunnel(tunnelId) {
+      if (!confirm('Close this tunnel connection?')) return;
+
+      const result = await api('/api/tunnel/' + tunnelId + '/close', { method: 'POST' });
+      if (result.success) {
+        if (state.currentTunnel && state.currentTunnel.ws) {
+          try { state.currentTunnel.ws.close(); } catch(e) {}
+        }
+        state.currentTunnel = null;
+        showToast('Tunnel closed');
+        render();
+      } else {
+        showToast(result.error || 'Failed to close tunnel', 'error');
+      }
+    }
+
+    async function loadTunnelLogs() {
+      try {
+        const result = await api('/api/tunnel/logs?limit=100');
+        state.tunnelLogs = result.logs || [];
+        state.tunnelLogsLoaded = true;
+      } catch(e) {
+        state.tunnelLogs = [];
+      }
+      render();
+    }
+
+    async function loadActiveTunnels() {
+      try {
+        const result = await api('/api/tunnel/active');
+        state.activeTunnels = result.tunnels || [];
+      } catch(e) {
+        state.activeTunnels = [];
+      }
+    }
+
+    function getTunnelProxyUrl(tunnelId) {
+      return API + '/api/tunnel/proxy/' + tunnelId + '/?token=' + encodeURIComponent(state.token);
+    }
+
     // Render
     function render() {
       const app = document.getElementById('app');
@@ -2366,6 +3077,9 @@ function getDashboardHTML(branding) {
               <div class="nav-item \${state.currentPage === 'metrics' ? 'active' : ''}" onclick="setPage('metrics')">
                 <span class="nav-item-icon">📊</span> Metrics
               </div>
+              <div class="nav-item \${state.currentPage === 'tunnels' ? 'active' : ''}" onclick="setPage('tunnels')">
+                <span class="nav-item-icon">🔒</span> Tunnels
+              </div>
               <div class="nav-item \${state.currentPage === 'firmware' ? 'active' : ''}" onclick="setPage('firmware')">
                 <span class="nav-item-icon">📦</span> Firmware
               </div>
@@ -2393,6 +3107,7 @@ function getDashboardHTML(branding) {
           <main class="main-content">
             \${state.currentPage === 'devices' ? renderDevicesPage() : ''}
             \${state.currentPage === 'widgets' ? renderWidgetsPage() : ''}
+            \${state.currentPage === 'tunnels' ? renderTunnelsPage() : ''}
             \${state.currentPage === 'metrics' ? renderMetricsPage() : ''}
             \${state.currentPage === 'firmware' ? renderFirmwarePage() : ''}
             \${state.currentPage === 'settings' ? renderSettingsPage() : ''}
@@ -2492,6 +3207,7 @@ function getDashboardHTML(branding) {
           \` : ''}
 
           <div class="device-actions">
+            <button class="btn btn-tunnel btn-sm" onclick="initiateTunnel('\${device.id}', '\${device.name}')" \${isOnline ? '' : 'disabled'} title="\${isOnline ? 'Open secure tunnel to device webserver' : 'Device must be online'}">🔒 Connect Remotely</button>
             <button class="btn btn-secondary btn-sm" onclick="viewConfig('\${device.id}')">⚙️ Config</button>
             <button class="btn btn-secondary btn-sm" onclick="requestConfig('\${device.id}')" title="Request device to sync its current config">🔄 Refresh</button>
             <button class="btn btn-danger btn-sm" onclick="deleteDevice('\${device.id}')">🗑️ Remove</button>
@@ -2831,6 +3547,156 @@ function getDashboardHTML(branding) {
       \`;
     }
 
+    function renderTunnelsPage() {
+      // Load logs on first visit
+      if (!state.tunnelLogsLoaded) {
+        loadTunnelLogs();
+        loadActiveTunnels();
+      }
+
+      const activeTunnelCount = state.activeTunnels.length;
+      const totalSessions = state.tunnelLogs.filter(l => l.event === 'initiated').length;
+
+      return \`
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Secure Tunnels</h1>
+            <p class="page-subtitle">Remote access to device webservers via encrypted tunnels</p>
+          </div>
+          <button class="btn btn-secondary" onclick="loadTunnelLogs();loadActiveTunnels();showToast('Refreshed');">
+            🔄 Refresh
+          </button>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--success)20;color:var(--success);">🔒</div>
+            <div class="stat-value">\${activeTunnelCount}</div>
+            <div class="stat-label">Active Tunnels</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--primary)20;color:var(--primary);">📊</div>
+            <div class="stat-value">\${totalSessions}</div>
+            <div class="stat-label">Total Sessions</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon" style="background:var(--accent)20;color:var(--accent);">📱</div>
+            <div class="stat-value">\${state.devices.filter(d => d.status === 'online').length}</div>
+            <div class="stat-label">Devices Available</div>
+          </div>
+        </div>
+
+        \${state.currentTunnel ? \`
+          <div class="settings-section" style="margin-bottom:1.5rem;">
+            <h3 class="settings-section-title">🖥️ Active Remote Session</h3>
+            <div class="tunnel-active-card">
+              <div class="tunnel-active-info">
+                <div class="tunnel-active-device">\${state.currentTunnel.deviceName}</div>
+                <div class="tunnel-active-meta">
+                  Tunnel ID: \${state.currentTunnel.tunnelId.substring(0, 8)}... ·
+                  Status: <span class="tunnel-status-\${state.currentTunnel.status}">\${state.currentTunnel.status.toUpperCase()}</span> ·
+                  Started: \${new Date(state.currentTunnel.startTime).toLocaleTimeString()}
+                </div>
+              </div>
+              <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                \${state.currentTunnel.status === 'active' ? \`
+                  <button class="btn btn-primary btn-sm" onclick="window.open(getTunnelProxyUrl('\${state.currentTunnel.tunnelId}'), '_blank')">🔗 Open in New Tab</button>
+                \` : ''}
+                <button class="btn btn-danger btn-sm" onclick="closeTunnel('\${state.currentTunnel.tunnelId}')">✕ Disconnect</button>
+              </div>
+            </div>
+
+            \${state.currentTunnel.status === 'connecting' ? \`
+              <div class="tunnel-connecting-overlay">
+                <div class="spinner-lg"></div>
+                <h3>Establishing Secure Tunnel...</h3>
+                <p style="color:var(--text-muted);">Waiting for device to connect. This may take up to 60 seconds.</p>
+              </div>
+            \` : ''}
+
+            \${state.currentTunnel.status === 'active' ? \`
+              <div class="tunnel-frame-container">
+                <div class="tunnel-frame-header">
+                  <span style="font-weight:500;">🔒 \${state.currentTunnel.deviceName} - Remote View</span>
+                  <span class="tunnel-status tunnel-status-active"><span class="status-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success);"></span> Connected</span>
+                </div>
+                <iframe src="\${getTunnelProxyUrl(state.currentTunnel.tunnelId)}" class="tunnel-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+              </div>
+            \` : ''}
+
+            \${state.currentTunnel.status === 'timeout' || state.currentTunnel.status === 'expired' ? \`
+              <div class="tunnel-connecting-overlay">
+                <div style="font-size:3rem;">⏱️</div>
+                <h3>Connection Timed Out</h3>
+                <p style="color:var(--text-muted);">The device did not establish a tunnel connection in time. Ensure the device is online and running the latest firmware.</p>
+                <button class="btn btn-primary" onclick="state.currentTunnel=null;render();">Dismiss</button>
+              </div>
+            \` : ''}
+
+            \${state.currentTunnel.status === 'closed' ? \`
+              <div class="tunnel-connecting-overlay">
+                <div style="font-size:3rem;">🔌</div>
+                <h3>Tunnel Closed</h3>
+                <p style="color:var(--text-muted);">The tunnel session has ended.</p>
+                <button class="btn btn-primary" onclick="state.currentTunnel=null;render();">Dismiss</button>
+              </div>
+            \` : ''}
+          </div>
+        \` : ''}
+
+        \${!state.currentTunnel ? \`
+          <div class="settings-section" style="margin-bottom:1.5rem;">
+            <h3 class="settings-section-title">📱 Quick Connect</h3>
+            <p style="color:var(--text-muted);margin-bottom:1rem;font-size:0.9rem;">Select an online device to establish a secure tunnel connection.</p>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">
+              \${state.devices.length === 0 ? '<p style="color:var(--text-muted);">No devices registered</p>' :
+                state.devices.map(d => \`
+                  <button class="btn \${d.status === 'online' ? 'btn-tunnel' : 'btn-secondary'} btn-sm" onclick="initiateTunnel('\${d.id}', '\${d.name}')" \${d.status === 'online' ? '' : 'disabled'}>
+                    \${d.status === 'online' ? '🔒' : '⭘'} \${d.name}
+                  </button>
+                \`).join('')}
+            </div>
+          </div>
+        \` : ''}
+
+        <div class="settings-section">
+          <h3 class="settings-section-title">📋 Tunnel Activity Log</h3>
+          \${state.tunnelLogs.length === 0 ? \`
+            <div class="empty-state" style="padding:2rem;">
+              <div class="empty-state-icon" style="font-size:2.5rem;">📋</div>
+              <h3>No tunnel activity yet</h3>
+              <p>Tunnel connection logs will appear here</p>
+            </div>
+          \` : \`
+            <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">
+              <table class="tunnel-log-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Event</th>
+                    <th>Device</th>
+                    <th>User</th>
+                    <th>Tunnel ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  \${state.tunnelLogs.map(log => \`
+                    <tr>
+                      <td>\${new Date(log.timestamp).toLocaleString()}</td>
+                      <td><span class="tunnel-event-badge tunnel-event-\${log.event}">\${log.event.replace(/_/g, ' ')}</span></td>
+                      <td>\${log.device_name || '-'}</td>
+                      <td>\${log.initiated_by || log.closed_by || log.admin_email || '-'}</td>
+                      <td style="font-family:monospace;font-size:0.75rem;">\${(log.tunnel_id || '').substring(0, 8)}...</td>
+                    </tr>
+                  \`).join('')}
+                </tbody>
+              </table>
+            </div>
+          \`}
+        </div>
+      \`;
+    }
+
     function renderMetricsPage() {
       const cacheKey = state.metricsDevice + ':' + state.metricsRange + ':' + state.metricsMetric;
       const data = state.metricsCache[cacheKey] || [];
@@ -3157,4 +4023,33 @@ function getDashboardHTML(branding) {
   </script>
 </body>
 </html>`;
+}
+
+// Helper: Log tunnel events to KV
+async function logTunnelEvent(env, event) {
+  try {
+    const logKey = `tunnel_log:${event.timestamp.replace(/[:.]/g, '-')}:${event.tunnel_id}`;
+    await env.CONFIGS.put(logKey, JSON.stringify(event), {
+      expirationTtl: TUNNEL_LOG_TTL
+    });
+
+    // Update log index for efficient retrieval
+    const logIndex = await env.CONFIGS.get('tunnel_log_index', 'json') || [];
+    logIndex.push(logKey);
+    // Keep last 500 log entries in index
+    if (logIndex.length > 500) logIndex.splice(0, logIndex.length - 500);
+    await env.CONFIGS.put('tunnel_log_index', JSON.stringify(logIndex));
+  } catch (e) {
+    console.error('Failed to log tunnel event:', e);
+  }
+}
+
+// Helper: HTML for disconnected tunnel iframe
+function getTunnelDisconnectedHTML() {
+  return `<!DOCTYPE html><html><head><style>
+    body { background:#0a0a0b; color:#e8e8e8; font-family:system-ui,-apple-system,sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
+    .container { text-align:center; }
+    h2 { font-size:1.5rem; margin-bottom:0.5rem; }
+    p { color:#888; }
+  </style></head><body><div class="container"><h2>Tunnel Disconnected</h2><p>The device tunnel is no longer active.</p></div></body></html>`;
 }

@@ -231,8 +231,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.3.0"
-VERSION_DATE = "2026-02-18"
+VERSION = "1.4.0"
+VERSION_DATE = "2026-03-04"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -736,6 +736,9 @@ class CloudAgent:
         self._last_heartbeat = None
         self._last_error = None
         self._connected = False
+        self._tunnel_thread = None
+        self._tunnel_ws = None
+        self._tunnel_active = False
 
     def initialize(self, config):
         """Initialize cloud agent from config."""
@@ -859,6 +862,12 @@ class CloudAgent:
                     server_logger.info("Config refresh requested by cloud admin")
                     config = load_config()
                     self.push_config(config)
+
+                # Check if tunnel was requested
+                tunnel_req = result.get('tunnel_requested')
+                if tunnel_req:
+                    server_logger.info(f"Tunnel requested: {tunnel_req.get('tunnel_id', 'unknown')}")
+                    self._establish_tunnel(tunnel_req)
 
         except Exception as e:
             self._connected = False
@@ -1074,6 +1083,286 @@ class CloudAgent:
         except:
             return '127.0.0.1'
 
+    def _establish_tunnel(self, tunnel_info):
+        """Establish a WebSocket tunnel to the cloud for remote access."""
+        import threading
+
+        tunnel_id = tunnel_info.get('tunnel_id')
+        tunnel_token = tunnel_info.get('tunnel_token')
+        ws_url = tunnel_info.get('cloud_ws_url')
+
+        if not all([tunnel_id, tunnel_token, ws_url]):
+            server_logger.error("Tunnel request missing required fields")
+            return
+
+        # Don't start if a tunnel is already active
+        if self._tunnel_active:
+            server_logger.info("Tunnel already active, ignoring new request")
+            return
+
+        def tunnel_worker():
+            self._tunnel_active = True
+            ws = None
+            try:
+                self._run_tunnel(tunnel_id, tunnel_token, ws_url)
+            except Exception as e:
+                server_logger.error(f"Tunnel error: {e}")
+            finally:
+                self._tunnel_active = False
+                self._tunnel_ws = None
+                server_logger.info(f"Tunnel {tunnel_id[:8]}... closed")
+
+        self._tunnel_thread = threading.Thread(target=tunnel_worker, daemon=True)
+        self._tunnel_thread.start()
+
+    def _run_tunnel(self, tunnel_id, tunnel_token, ws_url):
+        """Run the WebSocket tunnel, forwarding HTTP requests to local webserver."""
+        import socket
+        import struct
+        import hashlib
+        import base64
+        import ssl
+        import json
+
+        # Parse WebSocket URL
+        ws_url_with_params = f"{ws_url}?token={tunnel_token}&device_key={self.device_key}"
+
+        # Parse the URL
+        if ws_url_with_params.startswith('wss://'):
+            scheme = 'wss'
+            url_part = ws_url_with_params[6:]
+        elif ws_url_with_params.startswith('ws://'):
+            scheme = 'ws'
+            url_part = ws_url_with_params[5:]
+        else:
+            server_logger.error(f"Invalid WebSocket URL scheme: {ws_url_with_params}")
+            return
+
+        # Split host and path
+        if '/' in url_part:
+            host_port, path = url_part.split('/', 1)
+            path = '/' + path
+        else:
+            host_port = url_part
+            path = '/'
+
+        if ':' in host_port:
+            host, port = host_port.split(':')
+            port = int(port)
+        else:
+            host = host_port
+            port = 443 if scheme == 'wss' else 80
+
+        # Create socket connection
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(30)
+
+        if scheme == 'wss':
+            ctx = self._get_ssl_context()
+            sock = ctx.wrap_socket(sock, server_hostname=host)
+
+        sock.connect((host, port))
+
+        # WebSocket handshake
+        ws_key = base64.b64encode(os.urandom(16)).decode('utf-8')
+        handshake = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Upgrade: websocket\r\n"
+            f"Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {ws_key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n"
+            f"User-Agent: Multi-Frames/{VERSION}\r\n"
+            f"\r\n"
+        )
+        sock.sendall(handshake.encode('utf-8'))
+
+        # Read handshake response
+        response = b''
+        while b'\r\n\r\n' not in response:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("WebSocket handshake failed: connection closed")
+            response += chunk
+
+        status_line = response.split(b'\r\n')[0].decode('utf-8')
+        if '101' not in status_line:
+            server_logger.error(f"WebSocket handshake failed: {status_line}")
+            sock.close()
+            return
+
+        server_logger.info(f"Tunnel {tunnel_id[:8]}... WebSocket connected")
+        self._tunnel_ws = sock
+
+        # Main tunnel loop - read WebSocket frames and forward to local webserver
+        sock.settimeout(3600)  # 1 hour max session
+
+        try:
+            while self._tunnel_active:
+                frame_data = self._ws_read_frame(sock)
+                if frame_data is None:
+                    break  # Connection closed
+
+                opcode, payload = frame_data
+                if opcode == 0x8:  # Close frame
+                    break
+                elif opcode == 0x9:  # Ping
+                    self._ws_send_frame(sock, 0xA, payload)  # Pong
+                elif opcode == 0x1:  # Text frame
+                    try:
+                        msg = json.loads(payload.decode('utf-8'))
+                        if msg.get('type') == 'http_request':
+                            self._handle_tunnel_request(sock, msg)
+                    except json.JSONDecodeError:
+                        pass
+        except socket.timeout:
+            server_logger.info(f"Tunnel {tunnel_id[:8]}... timed out")
+        except Exception as e:
+            server_logger.error(f"Tunnel {tunnel_id[:8]}... error: {e}")
+        finally:
+            try:
+                self._ws_send_frame(sock, 0x8, b'')  # Send close frame
+            except Exception:
+                pass
+            sock.close()
+
+    def _handle_tunnel_request(self, ws_sock, msg):
+        """Handle an HTTP request forwarded through the tunnel."""
+        import json
+        import http.client
+
+        request_id = msg.get('request_id', '')
+        method = msg.get('method', 'GET')
+        path = msg.get('path', '/')
+        headers = msg.get('headers', {})
+
+        try:
+            # Connect to local webserver
+            conn = http.client.HTTPConnection('127.0.0.1', self._get_local_server_port(), timeout=15)
+            conn.request(method, path, headers=headers)
+            resp = conn.getresponse()
+
+            content_type = resp.getheader('Content-Type', 'text/html')
+            body = resp.read()
+
+            # Determine if binary content
+            is_binary = not content_type.startswith('text/') and not content_type.startswith('application/json') and not content_type.startswith('application/javascript')
+
+            import base64
+            response_msg = {
+                'type': 'http_response',
+                'request_id': request_id,
+                'status': resp.status,
+                'content_type': content_type,
+            }
+
+            if is_binary:
+                response_msg['body_base64'] = base64.b64encode(body).decode('utf-8')
+            else:
+                response_msg['body'] = body.decode('utf-8', errors='replace')
+
+            self._ws_send_frame(ws_sock, 0x1, json.dumps(response_msg).encode('utf-8'))
+            conn.close()
+
+        except Exception as e:
+            error_response = {
+                'type': 'http_response',
+                'request_id': request_id,
+                'status': 502,
+                'content_type': 'text/html',
+                'body': f'<html><body style="background:#0a0a0b;color:#e8e8e8;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>Device Error</h2><p>{str(e)}</p></div></body></html>'
+            }
+            try:
+                self._ws_send_frame(ws_sock, 0x1, json.dumps(error_response).encode('utf-8'))
+            except Exception:
+                pass
+
+    def _get_local_server_port(self):
+        """Get the port the local webserver is running on."""
+        try:
+            config = load_config()
+            return config.get('port', 8080)
+        except Exception:
+            return 8080
+
+    def _ws_read_frame(self, sock):
+        """Read a WebSocket frame. Returns (opcode, payload) or None on close."""
+        import struct
+
+        try:
+            header = self._recv_exact(sock, 2)
+            if not header:
+                return None
+
+            opcode = header[0] & 0x0F
+            masked = (header[1] & 0x80) != 0
+            length = header[1] & 0x7F
+
+            if length == 126:
+                data = self._recv_exact(sock, 2)
+                if not data:
+                    return None
+                length = struct.unpack('!H', data)[0]
+            elif length == 127:
+                data = self._recv_exact(sock, 8)
+                if not data:
+                    return None
+                length = struct.unpack('!Q', data)[0]
+
+            mask_key = None
+            if masked:
+                mask_key = self._recv_exact(sock, 4)
+                if not mask_key:
+                    return None
+
+            payload = self._recv_exact(sock, length) if length > 0 else b''
+            if payload is None:
+                return None
+
+            if masked and mask_key:
+                payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+
+            return (opcode, payload)
+
+        except Exception:
+            return None
+
+    def _ws_send_frame(self, sock, opcode, payload):
+        """Send a WebSocket frame (masked, as required by client)."""
+        import struct
+
+        # Client frames must be masked
+        mask_key = os.urandom(4)
+        masked_payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+
+        frame = bytearray()
+        frame.append(0x80 | opcode)  # FIN bit + opcode
+
+        length = len(payload)
+        if length < 126:
+            frame.append(0x80 | length)  # Mask bit + length
+        elif length < 65536:
+            frame.append(0x80 | 126)
+            frame.extend(struct.pack('!H', length))
+        else:
+            frame.append(0x80 | 127)
+            frame.extend(struct.pack('!Q', length))
+
+        frame.extend(mask_key)
+        frame.extend(masked_payload)
+
+        sock.sendall(bytes(frame))
+
+    def _recv_exact(self, sock, n):
+        """Receive exactly n bytes from socket."""
+        data = b''
+        while len(data) < n:
+            chunk = sock.recv(n - len(data))
+            if not chunk:
+                return None
+            data += chunk
+        return data
+
     def get_status(self):
         """Get cloud agent status."""
         return {
@@ -1082,7 +1371,8 @@ class CloudAgent:
             'cloud_url': self.cloud_url,
             'config_version': self.config_version,
             'last_heartbeat': self._last_heartbeat.isoformat() if self._last_heartbeat else None,
-            'last_error': self._last_error
+            'last_error': self._last_error,
+            'tunnel_active': self._tunnel_active
         }
 
 

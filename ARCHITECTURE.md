@@ -199,7 +199,64 @@ Cloudflare Worker providing centralized management.
       │  locally         │                   │
 ```
 
-### 3. Network Command Flow
+### 3. Secure Tunnel Flow
+
+```
+┌────────────┐     ┌────────────┐     ┌────────────┐
+│   Admin    │     │ Cloudflare │     │Multi-Frames│
+│  Browser   │     │   Worker   │     │  Device    │
+└─────┬──────┘     └─────┬──────┘     └─────┬──────┘
+      │                  │                   │
+      │  POST /api/      │                   │
+      │  tunnel/initiate │                   │
+      │  {device_id}     │                   │
+      │─────────────────>│                   │
+      │                  │  Generate tunnel  │
+      │                  │  token + ID       │
+      │                  │  Set device flag  │
+      │  tunnel_id,      │                   │
+      │  tunnel_token    │                   │
+      │<─────────────────│                   │
+      │                  │                   │
+      │                  │  Heartbeat (60s)  │
+      │                  │<──────────────────│
+      │                  │  tunnel_requested │
+      │                  │──────────────────>│
+      │                  │                   │
+      │                  │  WebSocket conn   │
+      │                  │  (device-ws)      │
+      │                  │  token + key auth │
+      │                  │<══════════════════│
+      │                  │  Tunnel active    │
+      │                  │                   │
+      │  Poll status     │                   │
+      │─────────────────>│                   │
+      │  status: active  │                   │
+      │<─────────────────│                   │
+      │                  │                   │
+      │  WebSocket conn  │                   │
+      │  (admin-ws)      │                   │
+      │  JWT auth        │                   │
+      │═════════════════>│                   │
+      │                  │                   │
+      │  HTTP request    │  Forward via WS   │
+      │  (proxy or WS)   │                   │
+      │═════════════════>│═════════════════=>│
+      │                  │  Local webserver  │
+      │                  │  response         │
+      │                  │<=================═│
+      │  HTTP response   │                   │
+      │<=================│                   │
+      │                  │                   │
+      │  POST /tunnel/   │                   │
+      │  {id}/close      │                   │
+      │─────────────────>│  Close WS         │
+      │                  │══════════════════>│
+      │  Tunnel closed   │                   │
+      │<─────────────────│                   │
+```
+
+### 4. Network Command Flow
 
 ```
 ┌────────┐     ┌────────────┐     ┌────────────┐

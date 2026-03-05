@@ -776,6 +776,7 @@ class CloudAgent:
         self._tunnel_thread = None
         self._tunnel_ws = None
         self._tunnel_active = False
+        self._tunnel_session_id = None
 
     def initialize(self, config):
         """Initialize cloud agent from config."""
@@ -1186,6 +1187,23 @@ class CloudAgent:
 
         def tunnel_worker():
             self._tunnel_active = True
+            # Create an authenticated session for tunnel proxy requests
+            # so the local webserver serves the dashboard instead of redirecting to /login
+            config = load_config()
+            users = config.get('users', {})
+            # Use the first admin user, or first available user
+            tunnel_user = None
+            for uname, udata in users.items():
+                if udata.get('role') == 'admin':
+                    tunnel_user = uname
+                    break
+            if not tunnel_user and users:
+                tunnel_user = next(iter(users))
+            if tunnel_user:
+                self._tunnel_session_id = create_session(tunnel_user)
+                server_logger.info(f"Tunnel {tunnel_id[:8]}... created session for user '{tunnel_user}'")
+            else:
+                self._tunnel_session_id = None
             ws = None
             try:
                 self._run_tunnel(tunnel_id, tunnel_token, ws_url)
@@ -1194,6 +1212,10 @@ class CloudAgent:
             finally:
                 self._tunnel_active = False
                 self._tunnel_ws = None
+                # Clean up tunnel session
+                if self._tunnel_session_id and self._tunnel_session_id in sessions:
+                    del sessions[self._tunnel_session_id]
+                self._tunnel_session_id = None
                 server_logger.info(f"Tunnel {tunnel_id[:8]}... closed")
 
         self._tunnel_thread = threading.Thread(target=tunnel_worker, daemon=True)
@@ -1321,10 +1343,29 @@ class CloudAgent:
         headers = msg.get('headers', {})
 
         try:
+            # Inject tunnel session cookie so local server serves authenticated content
+            if self._tunnel_session_id:
+                headers['Cookie'] = f'session={self._tunnel_session_id}'
+
             # Connect to local webserver
             conn = http.client.HTTPConnection('127.0.0.1', self._get_local_server_port(), timeout=15)
             conn.request(method, path, headers=headers)
             resp = conn.getresponse()
+
+            # Follow redirects (e.g. / -> /login) within the local server
+            redirect_count = 0
+            while resp.status in (301, 302, 303, 307) and redirect_count < 5:
+                redirect_count += 1
+                location = resp.getheader('Location', '')
+                if location.startswith('http'):
+                    # Absolute URL - extract path
+                    from urllib.parse import urlparse as _urlparse
+                    location = _urlparse(location).path or '/'
+                resp.read()  # Drain response body
+                conn.close()
+                conn = http.client.HTTPConnection('127.0.0.1', self._get_local_server_port(), timeout=15)
+                conn.request('GET', location, headers=headers)
+                resp = conn.getresponse()
 
             content_type = resp.getheader('Content-Type', 'text/html')
             body = resp.read()

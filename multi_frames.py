@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.3.0
+Multi-Frames v1.4.0
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -20,14 +20,24 @@ Features:
 - Raspberry Pi auto-detection and management
 - GitHub integration for firmware updates
 - Auto-restart on crash with alerts
+- Secure remote tunnels via cloud portal
 
 Usage:
     python multi_frames.py [--port PORT] [--host HOST]
-    
+
 Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.4.0 (2026-03-04)
+        - Secure remote tunnels: access device webservers via encrypted WebSocket tunnels
+        - Connect Remotely button on each device card in cloud portal
+        - Tunnel security: time-limited tokens, dual auth, JWT verification
+        - Tunnel activity logging with 90-day retention and audit trail
+        - Mobile-friendly tunnel management UI
+        - Lightweight tunnel-check polling (5s) for fast tunnel pickup
+        - New Tunnels page in cloud dashboard with stats and quick connect
+
     v1.3.0 (2026-02-18)
         - Cloud portal customization: full branding with logo/icon uploads
         - iOS and Android home screen icon uploads for cloud portal

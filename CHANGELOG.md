@@ -5,6 +5,34 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-03-05
+
+### Fixed
+- **Tunnel proxy disconnect**: Replaced in-memory `activeTunnels` Map with a Durable Object (`TunnelRelay`) for WebSocket relay. The per-isolate Map caused the proxy iframe to show "Tunnel Disconnected" because HTTP requests could hit a different Worker isolate than the one holding the device WebSocket.
+
+### Added
+- `TunnelRelay` Durable Object class — each tunnel gets its own DO instance guaranteeing a single execution context for device WebSocket, admin WebSocket, and HTTP proxy requests
+- `getTunnelDO()` helper to obtain a Durable Object stub by tunnel ID
+- Durable Object binding (`TUNNEL_RELAY`) and migration (`v1`) in `wrangler.toml`
+
+### Changed
+- Device-ws, admin-ws, and proxy tunnel routes now validate auth in the Worker fetch handler then forward to the `TunnelRelay` Durable Object
+- Tunnel status check (`/api/tunnel/:id/status`) queries DO for live active state instead of in-memory Map
+- Tunnel close (`/api/tunnel/:id/close`) delegates WebSocket teardown to DO
+- Active tunnels list (`/api/tunnel/active`) queries recent KV sessions and verifies via DO
+- Removed module-level `activeTunnels` Map from cloud worker (replaced by DO state)
+- Updated `wrangler.toml.example` with Durable Objects binding and migration config
+- Updated cloud README with Durable Objects requirement note and updated wrangler.toml example
+- Updated ARCHITECTURE.md tunnel flow diagram to show Durable Object relay
+- Updated CODEBASE.md cloud worker documentation to reflect DO architecture
+
+### Technical
+- Durable Objects require Cloudflare Workers Paid plan ($5/month)
+- Each `TunnelRelay` instance maintains: `deviceWebSocket`, `adminWebSockets[]`, `pendingProxyRequests` Map
+- DO handles `/device-ws`, `/admin-ws`, `/proxy/*`, `/status`, `/close` internal routes
+- Proxy requests use a promise-based pattern: store pending request, send via device WS, resolve on matching `http_response`
+- Device WebSocket close event automatically notifies all admin WebSockets and rejects pending proxy requests
+
 ## [1.4.1] - 2026-03-05
 
 ### Changed
@@ -75,7 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tunnel IDs use 16 random lowercase alphanumeric characters
 - `logTunnelEvent()` helper stores events in KV with indexed retrieval
 - `getTunnelDisconnectedHTML()` helper for disconnected tunnel iframe content
-- Active tunnels tracked in-memory per Cloudflare Worker isolate via `activeTunnels` Map
+- Active tunnels relayed via `TunnelRelay` Durable Object (one instance per tunnel session)
 - Tunnel proxy supports both text and binary content forwarding (base64 encoding for binary)
 
 ## [1.3.0] - 2026-02-18

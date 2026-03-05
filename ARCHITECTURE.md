@@ -94,6 +94,7 @@ Cloudflare Worker providing centralized management.
 │  │                    Router                                │   │
 │  │  /auth/*     → Authentication handlers                   │   │
 │  │  /api/*      → API handlers                              │   │
+│  │  /api/tunnel → Auth + forward to TunnelRelay DO          │   │
 │  │  /           → Dashboard HTML                            │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
@@ -112,6 +113,13 @@ Cloudflare Worker providing centralized management.
 │  │ - Push to devs  │  │ - Query 24h/7d  │  │ - Favicon       │ │
 │  │ - Type configs  │  │ - Daily summary │  │ - iOS/Android   │ │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              TunnelRelay Durable Object                  │   │
+│  │  One instance per tunnel session (keyed by tunnel ID)    │   │
+│  │  Holds device WS + admin WS + HTTP proxy relay           │   │
+│  │  Guarantees single execution context for all connections │   │
+│  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                 KV Namespaces                            │   │
@@ -201,59 +209,68 @@ Cloudflare Worker providing centralized management.
 
 ### 3. Secure Tunnel Flow
 
+Uses a **TunnelRelay Durable Object** (one instance per tunnel) to guarantee
+all WebSocket connections and proxy requests share the same execution context.
+
 ```
-┌────────────┐     ┌────────────┐     ┌────────────┐
-│   Admin    │     │ Cloudflare │     │Multi-Frames│
-│  Browser   │     │   Worker   │     │  Device    │
-└─────┬──────┘     └─────┬──────┘     └─────┬──────┘
-      │                  │                   │
-      │  POST /api/      │                   │
-      │  tunnel/initiate │                   │
-      │  {device_id}     │                   │
-      │─────────────────>│                   │
-      │                  │  Generate tunnel  │
-      │                  │  token + ID       │
-      │                  │  Set device flag  │
-      │  tunnel_id,      │                   │
-      │  tunnel_token    │                   │
-      │<─────────────────│                   │
-      │                  │                   │
-      │                  │  Heartbeat (60s)  │
-      │                  │<──────────────────│
-      │                  │  tunnel_requested │
-      │                  │──────────────────>│
-      │                  │                   │
-      │                  │  WebSocket conn   │
-      │                  │  (device-ws)      │
-      │                  │  token + key auth │
-      │                  │<══════════════════│
-      │                  │  Tunnel active    │
-      │                  │                   │
-      │  Poll status     │                   │
-      │─────────────────>│                   │
-      │  status: active  │                   │
-      │<─────────────────│                   │
-      │                  │                   │
-      │  WebSocket conn  │                   │
-      │  (admin-ws)      │                   │
-      │  JWT auth        │                   │
-      │═════════════════>│                   │
-      │                  │                   │
-      │  HTTP request    │  Forward via WS   │
-      │  (proxy or WS)   │                   │
-      │═════════════════>│═════════════════=>│
-      │                  │  Local webserver  │
-      │                  │  response         │
-      │                  │<=================═│
-      │  HTTP response   │                   │
-      │<=================│                   │
-      │                  │                   │
-      │  POST /tunnel/   │                   │
-      │  {id}/close      │                   │
-      │─────────────────>│  Close WS         │
-      │                  │══════════════════>│
-      │  Tunnel closed   │                   │
-      │<─────────────────│                   │
+┌────────────┐     ┌────────────┐  ┌──────────────┐  ┌────────────┐
+│   Admin    │     │ Cloudflare │  │ TunnelRelay  │  │Multi-Frames│
+│  Browser   │     │   Worker   │  │ Durable Obj  │  │  Device    │
+└─────┬──────┘     └─────┬──────┘  └──────┬───────┘  └─────┬──────┘
+      │                  │                │                  │
+      │  POST /api/      │                │                  │
+      │  tunnel/initiate │                │                  │
+      │  {device_id}     │                │                  │
+      │─────────────────>│  Store session │                  │
+      │                  │  in KV, set    │                  │
+      │                  │  device flag   │                  │
+      │  tunnel_id,      │                │                  │
+      │  tunnel_token    │                │                  │
+      │<─────────────────│                │                  │
+      │                  │                │                  │
+      │                  │                │  Poll /tunnel/   │
+      │                  │                │  check (5s)      │
+      │                  │                │<─────────────────│
+      │                  │                │  tunnel_requested│
+      │                  │                │─────────────────>│
+      │                  │                │                  │
+      │                  │  WS upgrade    │                  │
+      │                  │  (device-ws)   │                  │
+      │                  │  validate auth │                  │
+      │                  │<───────────────┼──────────────────│
+      │                  │─── forward ───>│  Accept device   │
+      │                  │                │  WebSocket       │
+      │                  │                │<═════════════════│
+      │                  │                │  Tunnel active   │
+      │                  │                │                  │
+      │  Poll status     │                │                  │
+      │─────────────────>│── query DO ───>│                  │
+      │  status: active  │<── active ────│                  │
+      │<─────────────────│                │                  │
+      │                  │                │                  │
+      │  WS upgrade      │                │                  │
+      │  (admin-ws)      │                │                  │
+      │  JWT auth        │                │                  │
+      │═════════════════>│─── forward ───>│  Accept admin    │
+      │                  │                │  WebSocket       │
+      │                  │                │                  │
+      │  HTTP proxy req  │                │                  │
+      │  (iframe load)   │                │                  │
+      │═════════════════>│─── forward ───>│── via device ──>│
+      │                  │                │   WebSocket      │
+      │                  │                │                  │
+      │                  │                │  Local webserver │
+      │                  │                │  response        │
+      │                  │                │<═════════════════│
+      │  HTTP response   │                │                  │
+      │<=================│<── response ──│                  │
+      │                  │                │                  │
+      │  POST /tunnel/   │                │                  │
+      │  {id}/close      │                │                  │
+      │─────────────────>│── close DO ──>│  Close all WS    │
+      │                  │                │═════════════════>│
+      │  Tunnel closed   │                │                  │
+      │<─────────────────│                │                  │
 ```
 
 ### 4. Network Command Flow

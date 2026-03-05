@@ -24,7 +24,7 @@ The main server file (~10,000 lines) contains all functionality in a single depl
 ### Constants (Lines 196-200)
 
 ```python
-VERSION = "1.4.1"           # Current version
+VERSION = "1.4.2"           # Current version
 VERSION_DATE = "2026-03-05" # Release date
 DEFAULT_PORT = 8080         # Default HTTP port
 DEFAULT_HOST = "0.0.0.0"    # Listen on all interfaces
@@ -486,16 +486,16 @@ router.post('/api/metrics/record', recordMetrics);     // Device auth
 router.get('/api/metrics/:id', queryMetrics);           // User auth
 router.get('/api/metrics/:id/latest', getLatestMetrics); // User auth
 
-// Secure Remote Tunnels (v1.4.0)
+// Secure Remote Tunnels (v1.4.0, Durable Objects relay in v1.4.2)
 router.post('/api/tunnel/initiate', initiateTunnel);       // User auth - start tunnel session
 router.get('/api/tunnel/check', checkTunnel);              // Device auth - lightweight tunnel poll
-router.get('/api/tunnel/:id/status', getTunnelStatus);     // User auth - check tunnel state
-router.post('/api/tunnel/:id/close', closeTunnel);         // User auth - close active tunnel
+router.get('/api/tunnel/:id/status', getTunnelStatus);     // User auth - check via DO status
+router.post('/api/tunnel/:id/close', closeTunnel);         // User auth - close via DO
 router.get('/api/tunnel/logs', getTunnelLogs);             // User auth - activity audit trail
-router.get('/api/tunnel/active', getActiveTunnels);        // User auth - list active tunnels
-router.get('/api/tunnel/proxy/:id/*', proxyTunnelRequest); // User auth - HTTP proxy via tunnel
-// WebSocket: /api/tunnel/device-ws/:id  - Device connects to relay (device key + tunnel token)
-// WebSocket: /api/tunnel/admin-ws/:id   - Admin connects to manage (JWT token)
+router.get('/api/tunnel/active', getActiveTunnels);        // User auth - list via DO status
+router.get('/api/tunnel/proxy/:id/*', proxyTunnelRequest); // User auth - forwarded to DO
+// WebSocket: /api/tunnel/device-ws/:id  - Auth in Worker, forwarded to TunnelRelay DO
+// WebSocket: /api/tunnel/admin-ws/:id   - Auth in Worker, forwarded to TunnelRelay DO
 
 // Dashboard
 router.get('/', serveDashboard);
@@ -658,6 +658,30 @@ router.get('/', serveDashboard);
   "reason": "Device disconnected"
 }
 ```
+
+### TunnelRelay Durable Object (v1.4.2)
+
+The `TunnelRelay` class is a Cloudflare Durable Object that maintains tunnel state in a single execution context, solving the per-isolate limitation of the previous in-memory `activeTunnels` Map.
+
+**Binding**: `TUNNEL_RELAY` (configured in `wrangler.toml`)
+
+Each tunnel session gets its own DO instance, keyed by tunnel ID via `idFromName(tunnelId)`.
+
+```javascript
+// Internal routes handled by TunnelRelay.fetch()
+/device-ws   // Device WebSocket connection (forwarded from Worker after auth)
+/admin-ws    // Admin WebSocket connection (forwarded from Worker after auth)
+/proxy/*     // HTTP proxy requests (forwarded from Worker after auth)
+/status      // Returns { active, adminCount, deviceId, deviceName, created }
+/close       // Closes all WebSockets and clears state
+```
+
+**State maintained per instance:**
+- `deviceWebSocket` — server-side WebSocket connected to the device
+- `adminWebSockets[]` — array of admin WebSocket connections
+- `pendingProxyRequests` — Map of `requestId → { resolve, reject, timeout }` for HTTP proxy relay
+
+**Auth model**: Authentication is validated in the main Worker `fetch()` handler before forwarding to the DO. The DO itself does not perform auth checks.
 
 ---
 

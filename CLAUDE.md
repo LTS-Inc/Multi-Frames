@@ -7,7 +7,7 @@ This document provides context for AI assistants working on the Multi-Frames cod
 **Multi-Frames** is a zero-dependency Python web server for displaying configurable iFrames and dashboard widgets. Designed for home dashboards, kiosks, digital signage, and Raspberry Pi deployments.
 
 - **Author**: Marco Longoria, LTS, Inc.
-- **Version**: 1.4.1
+- **Version**: 1.4.2
 - **License**: MIT
 - **Python**: 3.6+
 
@@ -134,6 +134,7 @@ python -m multi_frames --port 8080
 - Historical metrics logging with 24h/7d/30d chart views
 - Device performance tracking (CPU, memory, disk, uptime)
 - Secure remote tunnels for accessing device webservers
+- Tunnel relay via TunnelRelay Durable Object (one instance per tunnel)
 - Tunnel activity logging with 90-day retention
 
 ### 5. Raspberry Pi Integration
@@ -230,4 +231,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.4.1** (2026-03-05)
+Current: **v1.4.2** (2026-03-05)

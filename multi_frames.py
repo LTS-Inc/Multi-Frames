@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.4.4
+Multi-Frames v1.4.5
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -29,6 +29,13 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.4.5 (2026-03-05)
+        - Fixed tunnel remote view black screen: tunnel proxy requests now include
+          an authenticated session cookie so the local server serves the dashboard
+          instead of redirecting to /login
+        - Tunnel creates a session for the first admin user on connect, cleans up on close
+        - Tunnel proxy follows redirects within the local server as a safety net
+
     v1.4.4 (2026-03-05)
         - Fixed tunnel proxy "Connection refused" error: _get_local_server_port()
           now uses the global SERVER_PORT instead of reading from config file,
@@ -268,7 +275,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.4"
+VERSION = "1.4.5"
 VERSION_DATE = "2026-03-05"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"

@@ -5,6 +5,18 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-03-05
+
+### Changed
+- Updated all documentation to reflect v1.4.0 secure tunnel features
+- Added tunnel API routes, session/log/WebSocket message schemas to CODEBASE.md
+- Added secure tunnel flow diagram to ARCHITECTURE.md
+- Updated CloudAgent class documentation with tunnel methods in CODEBASE.md
+- Fixed tunnel connection timeout with lightweight `GET /api/tunnel/check` polling endpoint
+- Device now polls for tunnel requests every 5 seconds between 60-second heartbeats
+- Increased admin-side tunnel poll timeout from 60 to 120 seconds
+- Updated version references across all Python files and documentation
+
 ## [1.4.0] - 2026-03-04
 
 ### Added

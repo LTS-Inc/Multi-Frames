@@ -5,6 +5,20 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.5] - 2026-03-05
+
+### Fixed
+- **Tunnel remote view black screen**: Tunnel proxy requests were made without authentication, causing the local server to redirect to `/login` instead of serving the dashboard. The tunnel now creates an authenticated session (first admin user) on connect and injects the session cookie into all proxy requests.
+
+### Added
+- `CloudAgent._tunnel_session_id` — session created via `create_session()` when tunnel starts, cleaned up on close
+- Redirect following in `_handle_tunnel_request()` — follows up to 5 local redirects as a safety net
+
+### Changed
+- `_handle_tunnel_request()` injects `Cookie: session={id}` header into all proxy requests to the local webserver
+- Tunnel worker now loads config and finds the first admin user to create a tunnel session
+- Version bumped to 1.4.5
+
 ## [1.4.4] - 2026-03-05
 
 ### Fixed

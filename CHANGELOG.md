@@ -5,6 +5,67 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-03-04
+
+### Added
+- **Secure Remote Tunnels**: Access device webservers remotely through encrypted WebSocket tunnels
+  - New "Tunnels" page in cloud dashboard sidebar with full tunnel management
+  - "Connect Remotely" button on each device card (enabled when device is online)
+  - WebSocket-based tunnel relay through Cloudflare Worker for NAT traversal
+  - Embedded iframe view of remote device webserver within the cloud portal
+  - "Open in New Tab" option for full-screen remote access
+  - Quick Connect section on Tunnels page for rapid device connections
+  - `POST /api/tunnel/initiate` - Initiate tunnel session (user auth)
+  - `GET /api/tunnel/{id}/status` - Check tunnel status (user auth)
+  - `POST /api/tunnel/{id}/close` - Close active tunnel (user auth)
+  - `GET /api/tunnel/logs` - Retrieve tunnel activity logs (user auth)
+  - `GET /api/tunnel/active` - List active tunnels (user auth)
+  - `GET /api/tunnel/proxy/{id}/` - HTTP proxy through active tunnel (user auth)
+  - WebSocket endpoints for device and admin tunnel connections
+
+- **Tunnel Security**: Multi-layer security for remote access
+  - Time-limited tunnel tokens (5-minute validity for initial connection)
+  - Maximum 1-hour tunnel session duration
+  - Device key + tunnel token dual authentication for device WebSocket connections
+  - Admin JWT authentication for tunnel initiation and proxy access
+  - Per-tunnel unique IDs and cryptographic tokens
+  - Device online status verification before tunnel initiation
+  - Sandboxed iframe embedding for remote webserver view
+
+- **Tunnel Activity Logging**: Complete audit trail for all tunnel sessions
+  - Logs for: tunnel initiated, device connected, admin connected, tunnel closed
+  - Tracks initiating user, device name, timestamps, and tunnel IDs
+  - 90-day log retention with automatic expiration
+  - Activity log table in Tunnels page with event badges and filtering
+  - Stats cards showing active tunnels, total sessions, and available devices
+
+- **Mobile-Friendly Tunnel UI**: Responsive design for tunnel management on mobile
+  - Adaptive iframe height (70vh desktop, 50vh tablet, 40vh mobile)
+  - Responsive tunnel log table with column hiding on small screens
+  - Touch-friendly Connect Remotely buttons
+  - Responsive tunnel status cards and connecting overlay
+
+### Changed
+- Cloud dashboard sidebar now includes "Tunnels" navigation item
+- Device card actions row now includes "Connect Remotely" button (green, prominent)
+- CloudAgent heartbeat response includes `tunnel_requested` field for tunnel signaling
+- CloudAgent `get_status()` now returns `tunnel_active` boolean
+- Device actions section now wraps on mobile for better touch targets
+- Version bumped to 1.4.0
+
+### Technical
+- `CloudAgent._establish_tunnel()` - Starts tunnel WebSocket connection in background thread
+- `CloudAgent._run_tunnel()` - Raw WebSocket client implementation (no external dependencies)
+- `CloudAgent._handle_tunnel_request()` - Forwards HTTP requests to local webserver via `http.client`
+- `CloudAgent._ws_read_frame()` / `_ws_send_frame()` - WebSocket frame encoding/decoding per RFC 6455
+- `CloudAgent._recv_exact()` - Reliable socket read helper
+- Tunnel tokens use `tun_` prefix + 48 random alphanumeric characters
+- Tunnel IDs use 16 random lowercase alphanumeric characters
+- `logTunnelEvent()` helper stores events in KV with indexed retrieval
+- `getTunnelDisconnectedHTML()` helper for disconnected tunnel iframe content
+- Active tunnels tracked in-memory per Cloudflare Worker isolate via `activeTunnels` Map
+- Tunnel proxy supports both text and binary content forwarding (base64 encoding for binary)
+
 ## [1.3.0] - 2026-02-18
 
 ### Added

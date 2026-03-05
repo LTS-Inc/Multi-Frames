@@ -68,18 +68,29 @@ class CloudAgent(threading.Thread):
         """Main loop: heartbeat every 60 seconds."""
 
     def send_heartbeat(self):
-        """Send status to cloud, check for config updates."""
+        """Send status to cloud, check for config updates and tunnel requests."""
 
     def pull_config(self):
         """Download and apply new configuration."""
 
     def push_config(self):
         """Upload local configuration to cloud."""
+
+    def _establish_tunnel(self, tunnel_info):
+        """Start WebSocket tunnel to cloud for remote access."""
+
+    def _run_tunnel(self, tunnel_id, tunnel_token, ws_url):
+        """Run WebSocket tunnel, forwarding HTTP requests to local webserver."""
+
+    def _handle_tunnel_request(self, ws_sock, msg):
+        """Forward HTTP request from tunnel to local webserver."""
 ```
 
 **Headers**: Includes `User-Agent: Multi-Frames/{VERSION}` to avoid Cloudflare blocking.
 
 **SSL**: Uses `_get_ssl_context()` to detect available CA certificates and falls back to unverified context on systems without a CA bundle (Raspberry Pi, minimal installs).
+
+**Tunnels**: Implements raw WebSocket client (RFC 6455) with no external dependencies. Establishes outbound WebSocket connection to cloud worker, receives HTTP requests as JSON messages, forwards them to local webserver via `http.client`, and returns responses through the WebSocket.
 
 ### Class: MultiFramesHandler (Lines ~1000-9900)
 

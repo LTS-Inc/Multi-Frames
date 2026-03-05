@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.3.0-2026--02--18-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.4.0-2026--03--04-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -240,51 +240,54 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.3.0
+## 🆕 What's New in v1.4.0
 
 <table>
 <tr>
 <td>
 
-### 🎨 Cloud Portal Customization
+### 🔒 Secure Remote Tunnels
 
-- **Logo upload** with base64 storage (200x200px+ recommended)
-- **iOS home screen icon** (180x180px Apple Touch Icon)
-- **Android home screen icon** (192x192px + Web App Manifest)
-- **Favicon upload** for browser tab icon
-- Tabbed settings: Branding / App Icons / Colors & Theme
+- **Connect Remotely** button on each device card
+- Access device webservers through encrypted WebSocket tunnels
+- Embedded iframe view within the cloud portal
+- Open in new tab for full-screen remote access
+- NAT traversal — works with devices behind firewalls
 
 </td>
 <td>
 
-### 🧩 Widget Templates
+### 🛡️ Tunnel Security
 
-- Create widget templates from the cloud portal
-- Configure all 8 widget types with custom styling
-- **Push widgets to devices** individually or in bulk
-- Manage templates with create/edit/delete
+- Time-limited tunnel tokens (5-minute validity)
+- 1-hour maximum session duration
+- Dual authentication (device key + tunnel token)
+- Admin JWT verification for all tunnel operations
+- Device online status verification before connection
 
 </td>
 </tr>
 <tr>
 <td>
 
-### 📊 Historical Metrics
+### 📋 Tunnel Activity Logging
 
-- Devices auto-report CPU temp, memory, disk, CPU usage
-- **24h/7d/30d** interactive SVG charts
-- Daily summaries with 90-day retention
-- Per-device metric selector and comparison
+- Complete audit trail for all tunnel sessions
+- Event tracking: initiated, connected, closed
+- 90-day log retention with auto-expiration
+- Activity log table with event badges
+- Stats: active tunnels, total sessions, available devices
 
 </td>
 <td>
 
-### 📱 Responsive Design
+### 📱 Mobile-Friendly Tunnels
 
-- Mobile-optimized portal with touch-friendly uploads
-- Web App Manifest for Android "Add to Home Screen"
-- iOS standalone web app support
-- All new pages fully responsive
+- Responsive tunnel management UI
+- Adaptive iframe sizing (desktop/tablet/mobile)
+- Touch-friendly Connect Remotely buttons
+- Quick Connect section for rapid device access
+- Responsive log table with smart column hiding
 
 </td>
 </tr>
@@ -546,6 +549,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.4.0** | 2026-03-04 | Secure remote tunnels, tunnel activity logging, mobile tunnel UI |
 | **1.3.0** | 2026-02-18 | Cloud portal customization, widget templates, historical metrics |
 | **1.2.8** | 2026-02-14 | Fix cloud agent SSL certificate verification error |
 | **1.2.7** | 2026-02-14 | Cloud firmware deployment and config refresh |

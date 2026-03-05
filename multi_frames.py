@@ -786,25 +786,41 @@ class CloudAgent:
         return ctx
 
     def _run(self):
-        """Background thread main loop."""
+        """Background thread main loop.
+
+        Heartbeat every 60s for device status. Between heartbeats, polls
+        for tunnel requests every 5s using a lightweight check so remote
+        tunnel connections are picked up quickly.
+        """
         metrics_counter = 0
+        TUNNEL_POLL_INTERVAL = 5  # seconds between tunnel checks
+        HEARTBEAT_CYCLES = 12  # full heartbeat every 12 * 5s = 60s
+        cycle_counter = 0
         while not self._stop_event.is_set():
             try:
-                self._send_heartbeat()
-                self._check_config_update()
+                cycle_counter += 1
 
-                # Send metrics every 5th heartbeat (5 minutes)
-                metrics_counter += 1
-                if metrics_counter >= 5:
-                    metrics_counter = 0
-                    self._send_metrics()
+                if cycle_counter >= HEARTBEAT_CYCLES:
+                    cycle_counter = 0
+                    # Full heartbeat with device data
+                    self._send_heartbeat()
+                    self._check_config_update()
+
+                    # Send metrics every 5th heartbeat (~5 minutes)
+                    metrics_counter += 1
+                    if metrics_counter >= 5:
+                        metrics_counter = 0
+                        self._send_metrics()
+                else:
+                    # Lightweight tunnel check between heartbeats
+                    self._check_tunnel_request()
+
             except Exception as e:
                 self._last_error = str(e)
                 self._connected = False
                 server_logger.error(f"Cloud agent error: {e}")
 
-            # Wait for next interval or stop signal
-            self._stop_event.wait(self.HEARTBEAT_INTERVAL)
+            self._stop_event.wait(TUNNEL_POLL_INTERVAL)
 
     def _send_heartbeat(self):
         """Send heartbeat to cloud server."""
@@ -877,6 +893,37 @@ class CloudAgent:
     def _check_config_update(self):
         """Check for and apply config updates from cloud."""
         pass  # Handled in heartbeat response
+
+    def _check_tunnel_request(self):
+        """Lightweight poll to check for pending tunnel requests between heartbeats."""
+        if not self.cloud_url or not self.device_key:
+            return
+        if self._tunnel_active:
+            return  # Already have an active tunnel
+
+        import urllib.request
+        import json
+
+        try:
+            req = urllib.request.Request(
+                f"{self.cloud_url}/api/tunnel/check",
+                headers={
+                    'X-Device-Key': self.device_key,
+                    'User-Agent': f'Multi-Frames/{VERSION}'
+                },
+                method='GET'
+            )
+
+            with urllib.request.urlopen(req, timeout=5, context=self._get_ssl_context()) as response:
+                result = json.loads(response.read().decode('utf-8'))
+
+                tunnel_req = result.get('tunnel_requested')
+                if tunnel_req:
+                    server_logger.info(f"Tunnel requested (via poll): {tunnel_req.get('tunnel_id', 'unknown')}")
+                    self._establish_tunnel(tunnel_req)
+
+        except Exception:
+            pass  # Silent failure for lightweight check
 
     def _pull_config(self):
         """Pull config from cloud and apply it."""

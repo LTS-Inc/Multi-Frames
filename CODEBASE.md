@@ -24,8 +24,8 @@ The main server file (~10,000 lines) contains all functionality in a single depl
 ### Constants (Lines 196-200)
 
 ```python
-VERSION = "1.3.0"           # Current version
-VERSION_DATE = "2026-02-18" # Release date
+VERSION = "1.4.1"           # Current version
+VERSION_DATE = "2026-03-05" # Release date
 DEFAULT_PORT = 8080         # Default HTTP port
 DEFAULT_HOST = "0.0.0.0"    # Listen on all interfaces
 ```
@@ -486,6 +486,17 @@ router.post('/api/metrics/record', recordMetrics);     // Device auth
 router.get('/api/metrics/:id', queryMetrics);           // User auth
 router.get('/api/metrics/:id/latest', getLatestMetrics); // User auth
 
+// Secure Remote Tunnels (v1.4.0)
+router.post('/api/tunnel/initiate', initiateTunnel);       // User auth - start tunnel session
+router.get('/api/tunnel/check', checkTunnel);              // Device auth - lightweight tunnel poll
+router.get('/api/tunnel/:id/status', getTunnelStatus);     // User auth - check tunnel state
+router.post('/api/tunnel/:id/close', closeTunnel);         // User auth - close active tunnel
+router.get('/api/tunnel/logs', getTunnelLogs);             // User auth - activity audit trail
+router.get('/api/tunnel/active', getActiveTunnels);        // User auth - list active tunnels
+router.get('/api/tunnel/proxy/:id/*', proxyTunnelRequest); // User auth - HTTP proxy via tunnel
+// WebSocket: /api/tunnel/device-ws/:id  - Device connects to relay (device key + tunnel token)
+// WebSocket: /api/tunnel/admin-ws/:id   - Admin connects to manage (JWT token)
+
 // Dashboard
 router.get('/', serveDashboard);
 ```
@@ -501,7 +512,7 @@ router.get('/', serveDashboard);
   "last_seen": "2026-02-05T14:22:00Z",
   "status": "online",  // online, offline, unknown
   "info": {
-    "version": "1.3.0",
+    "version": "1.4.0",
     "ip": "192.168.1.100",
     "hostname": "raspberrypi",
     "temperature": 45.2,
@@ -512,7 +523,7 @@ router.get('/', serveDashboard);
   "config_version": 5,
   "pending_config": false,
   "firmware_pending": false,
-  "firmware_target_version": "1.3.0"
+  "firmware_target_version": "1.4.0"
 }
 ```
 
@@ -581,6 +592,70 @@ router.get('/', serveDashboard);
   "avg_cpu_usage": 12.8,
   "hours_online": 24,
   "hours": { "0": true, "1": true, ... }
+}
+```
+
+### Tunnel Session Schema (v1.4.0)
+
+```javascript
+// KV key: tunnel:{tunnelId} (TTL: 3600s)
+{
+  "tunnel_id": "a1b2c3d4e5f6g7h8",
+  "tunnel_token": "tun_AbCdEf...",        // 48 random alphanumeric chars
+  "device_id": "uuid",
+  "device_name": "Living Room Pi",
+  "initiated_by": "admin@company.com",
+  "initiated_at": "2026-03-04T10:00:00Z",
+  "status": "active",                      // pending -> active -> closed/expired
+  "expires_at": "2026-03-04T10:05:00Z",   // 5-minute token validity
+  "connected_at": "2026-03-04T10:00:08Z", // When device WebSocket connected
+  "closed_at": null,
+  "closed_by": null
+}
+```
+
+### Tunnel Log Schema (v1.4.0)
+
+```javascript
+// KV key: tunnel_log:{timestamp}:{tunnelId} (TTL: 90 days)
+{
+  "tunnel_id": "a1b2c3d4e5f6g7h8",
+  "device_id": "uuid",
+  "device_name": "Living Room Pi",
+  "event": "initiated",                    // initiated, device_connected, admin_connected, closed
+  "initiated_by": "admin@company.com",     // or closed_by, admin_email depending on event
+  "timestamp": "2026-03-04T10:00:00Z"
+}
+
+// Log index: tunnel_log_index (JSON array of log keys, max 500)
+```
+
+### Tunnel WebSocket Message Schema (v1.4.0)
+
+```javascript
+// Request (admin/cloud → device)
+{
+  "type": "http_request",
+  "request_id": "unique-id",
+  "method": "GET",
+  "path": "/",
+  "headers": { "Accept": "*/*" }
+}
+
+// Response (device → admin/cloud)
+{
+  "type": "http_response",
+  "request_id": "unique-id",
+  "status": 200,
+  "content_type": "text/html",
+  "body": "<html>...</html>",              // Text content
+  "body_base64": "..."                     // Binary content (base64 encoded)
+}
+
+// Control (cloud → admin)
+{
+  "type": "tunnel_closed",
+  "reason": "Device disconnected"
 }
 ```
 

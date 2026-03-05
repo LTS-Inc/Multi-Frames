@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.3.0
+Multi-Frames v1.4.1
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -20,14 +20,31 @@ Features:
 - Raspberry Pi auto-detection and management
 - GitHub integration for firmware updates
 - Auto-restart on crash with alerts
+- Secure remote tunnels via cloud portal
 
 Usage:
     python multi_frames.py [--port PORT] [--host HOST]
-    
+
 Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.4.1 (2026-03-05)
+        - Updated all documentation to reflect v1.4.0 tunnel features
+        - Added tunnel API routes, schemas, and WebSocket message docs to CODEBASE.md
+        - Added secure tunnel flow diagram to ARCHITECTURE.md
+        - Fixed tunnel connection timeout with lightweight 5s tunnel-check polling
+        - Increased admin-side tunnel poll timeout to 120 seconds
+
+    v1.4.0 (2026-03-04)
+        - Secure remote tunnels: access device webservers via encrypted WebSocket tunnels
+        - Connect Remotely button on each device card in cloud portal
+        - Tunnel security: time-limited tokens, dual auth, JWT verification
+        - Tunnel activity logging with 90-day retention and audit trail
+        - Mobile-friendly tunnel management UI
+        - Lightweight tunnel-check polling (5s) for fast tunnel pickup
+        - New Tunnels page in cloud dashboard with stats and quick connect
+
     v1.3.0 (2026-02-18)
         - Cloud portal customization: full branding with logo/icon uploads
         - iOS and Android home screen icon uploads for cloud portal
@@ -231,8 +248,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.0"
-VERSION_DATE = "2026-03-04"
+VERSION = "1.4.1"
+VERSION_DATE = "2026-03-05"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."

@@ -5,6 +5,15 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.4] - 2026-03-05
+
+### Fixed
+- **Tunnel proxy "Connection refused"**: `_get_local_server_port()` was reading the port from the config file, which may not reflect the actual running port when using the `--port` CLI flag. Now uses the global `SERVER_PORT` variable set at startup, ensuring the tunnel always connects to the correct local webserver port.
+
+### Changed
+- Simplified `CloudAgent._get_local_server_port()` to a single `return SERVER_PORT` statement
+- Version bumped to 1.4.4 across all files
+
 ## [1.4.3] - 2026-03-05
 
 ### Changed

@@ -24,7 +24,7 @@ The main server file (~10,000 lines) contains all functionality in a single depl
 ### Constants (Lines 196-200)
 
 ```python
-VERSION = "1.4.3"           # Current version
+VERSION = "1.4.4"           # Current version
 VERSION_DATE = "2026-03-05" # Release date
 DEFAULT_PORT = 8080         # Default HTTP port
 DEFAULT_HOST = "0.0.0.0"    # Listen on all interfaces

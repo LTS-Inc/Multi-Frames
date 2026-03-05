@@ -1358,11 +1358,7 @@ class CloudAgent:
 
     def _get_local_server_port(self):
         """Get the port the local webserver is running on."""
-        try:
-            config = load_config()
-            return config.get('port', 8080)
-        except Exception:
-            return 8080
+        return SERVER_PORT
 
     def _ws_read_frame(self, sock):
         """Read a WebSocket frame. Returns (opcode, payload) or None on close."""

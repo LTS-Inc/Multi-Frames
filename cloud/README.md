@@ -12,6 +12,7 @@ Manage multiple Multi-Frames installations remotely with a centralized cloud das
 - **Full Portal Branding**: Logo upload (base64), favicon, iOS/Android home screen icons
 - **Widget Templates**: Create, manage, and push widget templates to devices
 - **Historical Metrics**: CPU temp, memory, disk, CPU usage with 24h/7d/30d charts
+- **Secure Remote Tunnels**: Access device webservers via Durable Object WebSocket relay
 - **Mobile Friendly**: Hamburger menu, touch-optimized uploads, web app manifest
 
 ## Architecture
@@ -22,9 +23,14 @@ Manage multiple Multi-Frames installations remotely with a centralized cloud das
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
 │  │   Worker    │  │     KV      │  │      Dashboard      │ │
 │  │   (API)     │  │  (Storage)  │  │   (Embedded HTML)   │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
+│  └──────┬──────┘  └─────────────┘  └─────────────────────┘ │
+│         │ tunnel routes                                      │
+│  ┌──────▼──────────────────┐                                │
+│  │   TunnelRelay DO        │  ← Durable Object              │
+│  │   (WebSocket relay)     │    (1 instance per tunnel)      │
+│  └─────────────────────────┘                                │
 └───────────────────────────┬─────────────────────────────────┘
-                            │ HTTPS
+                            │ HTTPS / WSS
         ┌───────────────────┼───────────────────┐
         ▼                   ▼                   ▼
    ┌─────────┐         ┌─────────┐         ┌─────────┐

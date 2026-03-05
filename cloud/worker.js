@@ -926,6 +926,30 @@ export default {
         });
       }
 
+      // Lightweight tunnel check - device polls this every 5s to quickly pick up tunnel requests
+      if (path === '/api/tunnel/check' && method === 'GET') {
+        const deviceAuth = await verifyDeviceKey(request, env);
+        if (!deviceAuth) return errorResponse('Invalid device key', 401);
+
+        const device = await env.DEVICES.get(`device:${deviceAuth.id}`, 'json');
+        if (!device) return errorResponse('Device not found', 404);
+
+        // Check and clear tunnel request
+        const tunnelRequested = device.tunnel_requested || null;
+        if (tunnelRequested) {
+          device.tunnel_requested = null;
+          // Also refresh last_seen so device stays "online" during fast polling
+          device.last_seen = new Date().toISOString();
+          device.status = 'online';
+          await env.DEVICES.put(`device:${deviceAuth.id}`, JSON.stringify(device));
+        }
+
+        return jsonResponse({
+          success: true,
+          tunnel_requested: tunnelRequested
+        });
+      }
+
       // Check tunnel status
       if (path.match(/^\/api\/tunnel\/[\w]+\/status$/) && method === 'GET') {
         const user = await verifyAuth(request, env);
@@ -2910,7 +2934,7 @@ function getDashboardHTML(branding) {
 
     async function pollTunnelStatus(tunnelId) {
       let attempts = 0;
-      const maxAttempts = 60; // 60 seconds max wait
+      const maxAttempts = 120; // 120 seconds max wait
       const pollInterval = setInterval(async () => {
         attempts++;
         if (!state.currentTunnel || state.currentTunnel.tunnelId !== tunnelId) {
@@ -3610,7 +3634,7 @@ function getDashboardHTML(branding) {
               <div class="tunnel-connecting-overlay">
                 <div class="spinner-lg"></div>
                 <h3>Establishing Secure Tunnel...</h3>
-                <p style="color:var(--text-muted);">Waiting for device to connect. This may take up to 60 seconds.</p>
+                <p style="color:var(--text-muted);">Waiting for device to connect. This typically takes 5-15 seconds.</p>
               </div>
             \` : ''}
 

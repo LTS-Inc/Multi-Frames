@@ -26,6 +26,17 @@ id = "YOUR_SESSIONS_KV_NAMESPACE_ID"
 # ALLOWED_DOMAIN = "yourcompany.com"
 # JWT_SECRET = "your-jwt-secret"  # Use wrangler secret put
 
+# Durable Objects - Required for secure tunnel relay
+[durable_objects]
+bindings = [
+  { name = "TUNNEL_RELAY", class_name = "TunnelRelay" }
+]
+
+# Durable Object migrations - Required on first deploy with tunnel support
+[[migrations]]
+tag = "v1"
+new_classes = ["TunnelRelay"]
+
 # Custom domain (optional)
 # routes = [
 #   { pattern = "cloud.yourdomain.com/*", zone_name = "yourdomain.com" }

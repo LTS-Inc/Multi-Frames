@@ -124,7 +124,21 @@ id = "your-configs-kv-id"
 [[kv_namespaces]]
 binding = "SESSIONS"
 id = "your-sessions-kv-id"
+
+# Required for secure tunnel relay
+[durable_objects]
+bindings = [
+  { name = "TUNNEL_RELAY", class_name = "TunnelRelay" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["TunnelRelay"]
 ```
+
+> **Note**: Secure tunnels require Durable Objects, which are available on the
+> Cloudflare Workers Paid plan ($5/month). Tunnels will not function without
+> the `TUNNEL_RELAY` Durable Object binding configured.
 
 ### Environment Variables
 

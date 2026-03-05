@@ -107,8 +107,8 @@ const TUNNEL_TOKEN_TTL = 300; // 5 minutes for token validity
 const TUNNEL_SESSION_TTL = 3600; // 1 hour max tunnel session
 const TUNNEL_LOG_TTL = 60 * 60 * 24 * 90; // 90-day retention for tunnel logs
 
-// In-memory tunnel registry (per-isolate; Durable Objects would be needed for production scale)
-const activeTunnels = new Map(); // tunnelId -> { deviceWebSocket, adminWebSockets, created, deviceId, deviceName, initiatedBy }
+// Tunnel relay uses Durable Objects - each tunnel gets its own DO instance
+// that holds WebSocket connections and handles proxy requests in a single execution context
 
 function generateTunnelToken() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -126,6 +126,220 @@ function generateTunnelId() {
     id += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return id;
+}
+
+// =============================================================================
+// TunnelRelay Durable Object - Maintains WebSocket connections for tunnel relay
+// Each tunnel gets its own DO instance, guaranteeing a single execution context
+// for all connections (device WS, admin WS, HTTP proxy) within a tunnel session.
+// =============================================================================
+export class TunnelRelay {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.deviceWebSocket = null;
+    this.adminWebSockets = [];
+    this.deviceId = null;
+    this.deviceName = null;
+    this.initiatedBy = null;
+    this.created = null;
+    this.pendingProxyRequests = new Map();
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    if (path === '/device-ws') {
+      return this.handleDeviceWebSocket(request, url);
+    }
+    if (path === '/admin-ws') {
+      return this.handleAdminWebSocket(request);
+    }
+    if (path.startsWith('/proxy')) {
+      return this.handleProxy(request, url);
+    }
+    if (path === '/status') {
+      return new Response(JSON.stringify({
+        active: this.deviceWebSocket !== null,
+        adminCount: this.adminWebSockets.length,
+        deviceId: this.deviceId,
+        deviceName: this.deviceName,
+        created: this.created
+      }), { headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } });
+    }
+    if (path === '/close') {
+      this.closeTunnel('Closed by admin');
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS }
+      });
+    }
+    return new Response('Not found', { status: 404 });
+  }
+
+  handleDeviceWebSocket(request, url) {
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('Expected WebSocket upgrade', { status: 426 });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    this.deviceWebSocket = server;
+    this.created = new Date().toISOString();
+    this.deviceId = url.searchParams.get('device_id') || null;
+    this.deviceName = url.searchParams.get('device_name') || null;
+
+    server.addEventListener('message', (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'http_response') {
+          // Resolve pending proxy request if matched
+          const pending = this.pendingProxyRequests.get(msg.request_id);
+          if (pending) {
+            clearTimeout(pending.timeout);
+            pending.resolve(msg);
+            this.pendingProxyRequests.delete(msg.request_id);
+          }
+          // Also forward to admin WebSockets
+          for (const adminWs of this.adminWebSockets) {
+            try { adminWs.send(event.data); } catch(e) {}
+          }
+        }
+      } catch(e) {}
+    });
+
+    server.addEventListener('close', () => {
+      this.deviceWebSocket = null;
+      for (const ws of this.adminWebSockets) {
+        try { ws.send(JSON.stringify({ type: 'tunnel_closed', reason: 'Device disconnected' })); } catch(e) {}
+        try { ws.close(1000, 'Device disconnected'); } catch(e) {}
+      }
+      this.adminWebSockets = [];
+      // Clear pending proxy requests
+      for (const [id, pending] of this.pendingProxyRequests) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error('Device disconnected'));
+      }
+      this.pendingProxyRequests.clear();
+    });
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  handleAdminWebSocket(request) {
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('Expected WebSocket upgrade', { status: 426 });
+    }
+    if (!this.deviceWebSocket) {
+      return new Response('Tunnel not active', { status: 404 });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    this.adminWebSockets.push(server);
+
+    server.addEventListener('message', (event) => {
+      try {
+        if (this.deviceWebSocket && this.deviceWebSocket.readyState === 1) {
+          this.deviceWebSocket.send(event.data);
+        }
+      } catch(e) {}
+    });
+
+    server.addEventListener('close', () => {
+      const idx = this.adminWebSockets.indexOf(server);
+      if (idx !== -1) this.adminWebSockets.splice(idx, 1);
+    });
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async handleProxy(request, url) {
+    if (!this.deviceWebSocket) {
+      return new Response(getTunnelDisconnectedHTML(), {
+        headers: { 'Content-Type': 'text/html' }
+      });
+    }
+
+    // Build proxy path: strip /proxy prefix
+    const proxyPath = url.pathname.replace(/^\/proxy/, '') || '/';
+    // Preserve query params except token
+    const proxyParams = new URLSearchParams(url.searchParams);
+    proxyParams.delete('token');
+    const proxySearch = proxyParams.toString() ? '?' + proxyParams.toString() : '';
+
+    const requestId = generateTunnelId();
+
+    const responsePromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingProxyRequests.delete(requestId);
+        reject(new Error('Request timeout'));
+      }, 30000);
+
+      this.pendingProxyRequests.set(requestId, { resolve, reject, timeout });
+    });
+
+    // Send request to device through WebSocket
+    try {
+      this.deviceWebSocket.send(JSON.stringify({
+        type: 'http_request',
+        request_id: requestId,
+        method: request.method || 'GET',
+        path: proxyPath + proxySearch,
+        headers: { 'Accept': request.headers.get('Accept') || '*/*' }
+      }));
+    } catch(e) {
+      this.pendingProxyRequests.delete(requestId);
+      return new Response(getTunnelDisconnectedHTML(), {
+        headers: { 'Content-Type': 'text/html' }
+      });
+    }
+
+    try {
+      const response = await responsePromise;
+      const headers = {
+        'Content-Type': response.content_type || 'text/html',
+        ...CORS_HEADERS
+      };
+      let body = response.body || '';
+      if (response.body_base64) {
+        body = Uint8Array.from(atob(response.body_base64), c => c.charCodeAt(0));
+      }
+      return new Response(body, { status: response.status || 200, headers });
+    } catch (e) {
+      return new Response('<html><body style="background:#0a0a0b;color:#e8e8e8;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>Request Timeout</h2><p>The device did not respond in time.</p></div></body></html>', {
+        status: 504,
+        headers: { 'Content-Type': 'text/html' }
+      });
+    }
+  }
+
+  closeTunnel(reason) {
+    if (this.deviceWebSocket) {
+      try { this.deviceWebSocket.close(1000, reason); } catch(e) {}
+      this.deviceWebSocket = null;
+    }
+    for (const ws of this.adminWebSockets) {
+      try { ws.send(JSON.stringify({ type: 'tunnel_closed', reason })); } catch(e) {}
+      try { ws.close(1000, reason); } catch(e) {}
+    }
+    this.adminWebSockets = [];
+    for (const [id, pending] of this.pendingProxyRequests) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(reason));
+    }
+    this.pendingProxyRequests.clear();
+  }
+}
+
+// Helper: get Durable Object stub for a tunnel
+function getTunnelDO(env, tunnelId) {
+  const id = env.TUNNEL_RELAY.idFromName(tunnelId);
+  return env.TUNNEL_RELAY.get(id);
 }
 
 export default {
@@ -959,11 +1173,17 @@ export default {
         const session = await env.CONFIGS.get(`tunnel:${tunnelId}`, 'json');
         if (!session) return errorResponse('Tunnel not found or expired', 404);
 
-        // Check if tunnel is active in memory
-        const tunnel = activeTunnels.get(tunnelId);
-        if (tunnel) {
-          session.status = 'active';
-        } else if (session.status === 'pending') {
+        // Check if tunnel is active via Durable Object
+        try {
+          const stub = getTunnelDO(env, tunnelId);
+          const doStatus = await stub.fetch(new Request('https://do/status'));
+          const doData = await doStatus.json();
+          if (doData.active) {
+            session.status = 'active';
+          }
+        } catch(e) {}
+
+        if (session.status === 'pending') {
           // Check if expired
           if (new Date(session.expires_at) < new Date()) {
             session.status = 'expired';
@@ -981,15 +1201,11 @@ export default {
         const tunnelId = path.split('/')[3];
         const session = await env.CONFIGS.get(`tunnel:${tunnelId}`, 'json');
 
-        // Close active tunnel
-        const tunnel = activeTunnels.get(tunnelId);
-        if (tunnel) {
-          try { tunnel.deviceWebSocket.close(1000, 'Tunnel closed by admin'); } catch(e) {}
-          for (const ws of (tunnel.adminWebSockets || [])) {
-            try { ws.close(1000, 'Tunnel closed by admin'); } catch(e) {}
-          }
-          activeTunnels.delete(tunnelId);
-        }
+        // Close active tunnel via Durable Object
+        try {
+          const stub = getTunnelDO(env, tunnelId);
+          await stub.fetch(new Request('https://do/close', { method: 'POST' }));
+        } catch(e) {}
 
         if (session) {
           session.status = 'closed';
@@ -1044,22 +1260,40 @@ export default {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
+        // Query active tunnels from recent KV sessions + verify via DO
         const tunnels = [];
-        for (const [id, tunnel] of activeTunnels) {
-          tunnels.push({
-            tunnel_id: id,
-            device_id: tunnel.deviceId,
-            device_name: tunnel.deviceName,
-            initiated_by: tunnel.initiatedBy,
-            created: tunnel.created,
-            admin_connections: (tunnel.adminWebSockets || []).length
-          });
+        const logIndex = await env.CONFIGS.get('tunnel_log_index', 'json') || [];
+        const checked = new Set();
+        // Check recent tunnel sessions for active ones
+        for (const logKey of logIndex.slice(-50)) {
+          const log = await env.CONFIGS.get(logKey, 'json');
+          if (log && log.tunnel_id && !checked.has(log.tunnel_id)) {
+            checked.add(log.tunnel_id);
+            const session = await env.CONFIGS.get(`tunnel:${log.tunnel_id}`, 'json');
+            if (session && (session.status === 'active' || session.status === 'pending')) {
+              try {
+                const stub = getTunnelDO(env, log.tunnel_id);
+                const doStatus = await stub.fetch(new Request('https://do/status'));
+                const doData = await doStatus.json();
+                if (doData.active) {
+                  tunnels.push({
+                    tunnel_id: log.tunnel_id,
+                    device_id: doData.deviceId,
+                    device_name: doData.deviceName,
+                    created: doData.created,
+                    admin_connections: doData.adminCount
+                  });
+                }
+              } catch(e) {}
+            }
+          }
         }
 
         return jsonResponse({ tunnels });
       }
 
       // Device WebSocket endpoint - device connects here to establish tunnel
+      // Auth validation happens here, then forwarded to Durable Object for relay
       if (path.match(/^\/api\/tunnel\/device-ws\/[\w]+$/) && request.headers.get('Upgrade') === 'websocket') {
         const tunnelId = path.split('/').pop();
         const tunnelToken = url.searchParams.get('token');
@@ -1085,25 +1319,7 @@ export default {
           }
         }
 
-        // Upgrade to WebSocket
-        const pair = new WebSocketPair();
-        const [client, server] = Object.values(pair);
-
-        server.accept();
-
-        // Register tunnel as active
-        const tunnelData = {
-          deviceWebSocket: server,
-          adminWebSockets: [],
-          deviceId: session.device_id,
-          deviceName: session.device_name,
-          initiatedBy: session.initiated_by,
-          created: new Date().toISOString(),
-          pendingRequests: new Map()
-        };
-        activeTunnels.set(tunnelId, tunnelData);
-
-        // Update session status
+        // Update session status in KV
         session.status = 'active';
         session.connected_at = new Date().toISOString();
         await env.CONFIGS.put(`tunnel:${tunnelId}`, JSON.stringify(session), {
@@ -1118,33 +1334,12 @@ export default {
           timestamp: new Date().toISOString()
         });
 
-        server.addEventListener('message', (event) => {
-          // Forward responses from device to requesting admin WebSockets
-          try {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'http_response') {
-              const tunnel = activeTunnels.get(tunnelId);
-              if (tunnel) {
-                for (const adminWs of tunnel.adminWebSockets) {
-                  try { adminWs.send(event.data); } catch(e) {}
-                }
-              }
-            }
-          } catch(e) {}
-        });
-
-        server.addEventListener('close', () => {
-          const tunnel = activeTunnels.get(tunnelId);
-          if (tunnel) {
-            for (const ws of tunnel.adminWebSockets) {
-              try { ws.send(JSON.stringify({ type: 'tunnel_closed', reason: 'Device disconnected' })); } catch(e) {}
-              try { ws.close(1000, 'Device disconnected'); } catch(e) {}
-            }
-            activeTunnels.delete(tunnelId);
-          }
-        });
-
-        return new Response(null, { status: 101, webSocket: client });
+        // Forward WebSocket upgrade to Durable Object
+        const stub = getTunnelDO(env, tunnelId);
+        const doUrl = new URL('https://do/device-ws');
+        doUrl.searchParams.set('device_id', session.device_id);
+        doUrl.searchParams.set('device_name', session.device_name);
+        return stub.fetch(new Request(doUrl.toString(), request));
       }
 
       // Admin WebSocket endpoint - admin connects here to use the tunnel
@@ -1157,47 +1352,22 @@ export default {
         const user = await verifyToken(token, env);
         if (!user) return new Response('Unauthorized', { status: 401 });
 
-        // Check tunnel exists and is active
-        const tunnel = activeTunnels.get(tunnelId);
-        if (!tunnel) {
-          return new Response('Tunnel not active', { status: 404 });
-        }
-
-        // Upgrade to WebSocket
-        const pair = new WebSocketPair();
-        const [client, server] = Object.values(pair);
-
-        server.accept();
-
-        tunnel.adminWebSockets.push(server);
-
         await logTunnelEvent(env, {
           tunnel_id: tunnelId,
-          device_id: tunnel.deviceId,
-          device_name: tunnel.deviceName,
+          device_id: '',
+          device_name: '',
           event: 'admin_connected',
           admin_email: user.email,
           timestamp: new Date().toISOString()
         });
 
-        server.addEventListener('message', (event) => {
-          // Forward HTTP requests from admin to device
-          try {
-            if (tunnel.deviceWebSocket.readyState === 1) {
-              tunnel.deviceWebSocket.send(event.data);
-            }
-          } catch(e) {}
-        });
-
-        server.addEventListener('close', () => {
-          const idx = tunnel.adminWebSockets.indexOf(server);
-          if (idx !== -1) tunnel.adminWebSockets.splice(idx, 1);
-        });
-
-        return new Response(null, { status: 101, webSocket: client });
+        // Forward WebSocket upgrade to Durable Object
+        const stub = getTunnelDO(env, tunnelId);
+        return stub.fetch(new Request('https://do/admin-ws', request));
       }
 
       // Proxy HTTP request through tunnel (for iframe embedding)
+      // Forwarded to Durable Object which holds the device WebSocket
       if (path.match(/^\/api\/tunnel\/proxy\/[\w]+/) && method === 'GET') {
         const parts = path.split('/');
         const tunnelId = parts[4];
@@ -1208,65 +1378,18 @@ export default {
         const user = await verifyToken(token, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
-        // Check tunnel exists
-        const tunnel = activeTunnels.get(tunnelId);
-        if (!tunnel) {
-          return new Response(getTunnelDisconnectedHTML(), {
-            headers: { 'Content-Type': 'text/html' }
-          });
+        // Forward to Durable Object for proxy relay
+        const stub = getTunnelDO(env, tunnelId);
+        const proxyPath = '/proxy/' + parts.slice(5).join('/');
+        // Pass through query params (token will be stripped by DO)
+        const doUrl = new URL('https://do' + proxyPath);
+        for (const [k, v] of url.searchParams) {
+          doUrl.searchParams.set(k, v);
         }
-
-        // Build proxy path (everything after /api/tunnel/proxy/{tunnelId})
-        const proxyPath = '/' + parts.slice(5).join('/') + url.search;
-
-        // Send request through WebSocket to device and wait for response
-        const requestId = generateTunnelId();
-        const requestPromise = new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error('Request timeout'));
-          }, 30000);
-
-          // Listen for response from device
-          const handler = (event) => {
-            try {
-              const msg = JSON.parse(event.data);
-              if (msg.type === 'http_response' && msg.request_id === requestId) {
-                clearTimeout(timeout);
-                tunnel.deviceWebSocket.removeEventListener('message', handler);
-                resolve(msg);
-              }
-            } catch(e) {}
-          };
-
-          tunnel.deviceWebSocket.addEventListener('message', handler);
-
-          // Send request to device
-          tunnel.deviceWebSocket.send(JSON.stringify({
-            type: 'http_request',
-            request_id: requestId,
-            method: 'GET',
-            path: proxyPath,
-            headers: { 'Accept': request.headers.get('Accept') || '*/*' }
-          }));
-        });
-
-        try {
-          const response = await requestPromise;
-          const headers = {
-            'Content-Type': response.content_type || 'text/html',
-            ...CORS_HEADERS
-          };
-          let body = response.body || '';
-          if (response.body_base64) {
-            body = Uint8Array.from(atob(response.body_base64), c => c.charCodeAt(0));
-          }
-          return new Response(body, { status: response.status || 200, headers });
-        } catch (e) {
-          return new Response('<html><body style="background:#0a0a0b;color:#e8e8e8;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>Request Timeout</h2><p>The device did not respond in time.</p></div></body></html>', {
-            status: 504,
-            headers: { 'Content-Type': 'text/html' }
-          });
-        }
+        return stub.fetch(new Request(doUrl.toString(), {
+          method: request.method,
+          headers: request.headers
+        }));
       }
 
       // ============== BRANDING ASSET ROUTES ==============

@@ -5,6 +5,19 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2026-03-05
+
+### Changed
+- Updated ARCHITECTURE.md tunnel flow diagram to show TunnelRelay Durable Object as dedicated relay column
+- Updated ARCHITECTURE.md cloud backend component diagram with TunnelRelay DO box
+- Added TunnelRelay Durable Object section to CODEBASE.md with internal routes and state schema
+- Updated CODEBASE.md tunnel route comments to note DO forwarding
+- Updated cloud README architecture diagram to show TunnelRelay DO and WSS connections
+- Added secure remote tunnels feature line to cloud README
+- Updated wrangler.toml.example with Durable Objects binding and migration config
+- Updated CHANGELOG.md with full v1.4.2 Fixed/Added/Changed/Technical breakdown
+- Version bumped to 1.4.3 across all files
+
 ## [1.4.2] - 2026-03-05
 
 ### Fixed

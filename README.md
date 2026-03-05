@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.4.2-2026--03--05-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.4.3-2026--03--05-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -549,6 +549,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.4.3** | 2026-03-05 | Documentation updates for Durable Objects tunnel relay |
 | **1.4.2** | 2026-03-05 | Fix tunnel proxy disconnect with Durable Objects relay |
 | **1.4.1** | 2026-03-05 | Documentation updates, tunnel timeout fix, fast tunnel polling |
 | **1.4.0** | 2026-03-04 | Secure remote tunnels, tunnel activity logging, mobile tunnel UI |

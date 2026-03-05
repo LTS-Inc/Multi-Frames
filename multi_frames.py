@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.4.2
+Multi-Frames v1.4.3
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -29,6 +29,13 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.4.3 (2026-03-05)
+        - Updated all documentation to reflect Durable Objects tunnel relay
+        - Revised ARCHITECTURE.md tunnel flow diagram with TunnelRelay DO column
+        - Added TunnelRelay DO section to CODEBASE.md with schema and routes
+        - Updated cloud README architecture diagram and wrangler.toml example
+        - Updated CHANGELOG.md with full v1.4.2 technical breakdown
+
     v1.4.2 (2026-03-05)
         - Fixed tunnel proxy disconnect: replaced in-memory activeTunnels Map with
           Durable Objects for WebSocket relay, ensuring device/admin/proxy requests
@@ -256,7 +263,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 VERSION_DATE = "2026-03-05"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"

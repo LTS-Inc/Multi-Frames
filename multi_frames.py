@@ -9837,10 +9837,40 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
                 conn.request('GET', request_path, headers={
                     'Host': parsed_target.netloc,
-                    'User-Agent': 'Multi-Frames/1.4.6 Proxy',
-                    'Accept': '*/*'
+                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.6 Proxy)',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Encoding': 'identity'
                 })
                 resp = conn.getresponse()
+
+                # Follow redirects (up to 5 hops)
+                redirects = 0
+                while resp.status in (301, 302, 303, 307, 308) and redirects < 5:
+                    redirect_url = resp.getheader('Location', '')
+                    resp.read()  # drain body
+                    if redirect_url.startswith('http'):
+                        # Absolute redirect - re-parse
+                        redir_parsed = urlparse(redirect_url)
+                        request_path = redir_parsed.path or '/'
+                        if redir_parsed.query:
+                            request_path += '?' + redir_parsed.query
+                        # Reconnect if host changed
+                        if redir_parsed.hostname != conn_host or (redir_parsed.port or 80) != conn_port:
+                            conn.close()
+                            conn_host = redir_parsed.hostname
+                            conn_port = redir_parsed.port or 80
+                            conn = http.client.HTTPConnection(conn_host, conn_port, timeout=10)
+                    else:
+                        request_path = redirect_url
+                    conn.request('GET', request_path, headers={
+                        'Host': f'{conn_host}:{conn_port}',
+                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.6 Proxy)',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Encoding': 'identity'
+                    })
+                    resp = conn.getresponse()
+                    redirects += 1
+
                 body = resp.read()
                 conn.close()
 

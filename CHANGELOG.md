@@ -5,6 +5,17 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.6] - 2026-03-08
+
+### Fixed
+- **Tunnel "Not found" on navigation**: Clicking Admin, Help, or any link inside the tunnel remote view navigated to the cloud worker domain instead of routing through the proxy. Injected a URL-rewriting script into HTML responses that intercepts link clicks, form submissions, `fetch()`, and `XMLHttpRequest` to rewrite absolute paths through the tunnel proxy.
+
+### Added
+- **POST support for tunnel proxy**: The proxy route now accepts POST requests, forwarding request body and Content-Type through the WebSocket relay to the device. Enables admin panel form submissions (settings, iframe management, etc.) through the tunnel.
+- URL-rewriting script injection in `handleProxy()` response pipeline (worker.js)
+- Request body forwarding in TunnelRelay DO `handleProxy()` (worker.js)
+- POST body handling in `_handle_tunnel_request()` with Content-Length (multi_frames.py)
+
 ## [1.4.5] - 2026-03-05
 
 ### Fixed

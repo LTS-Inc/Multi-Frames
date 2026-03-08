@@ -6043,7 +6043,11 @@ def render_main_page(user, config):
                 # Use proxy URL for local targets when iframe_proxy is enabled
                 iframe_url = url
                 if iframe_proxy_enabled and raw_url and validate_local_ip(raw_url):
-                    iframe_url = f'/proxy/{i}'
+                    # Preserve hash fragment for SPA routing (browser-only, not sent to server)
+                    hash_frag = ''
+                    if '#' in raw_url:
+                        hash_frag = '#' + raw_url.split('#', 1)[1]
+                    iframe_url = f'/proxy/{i}{hash_frag}'
                 if wrapper_style_str:
                     iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe></div>'
                 else:
@@ -9808,6 +9812,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             target_url = iframes[iframe_idx].get("url", "")
+            # Strip hash fragment - it's browser-only, not sent in HTTP requests
+            if '#' in target_url:
+                target_url = target_url.split('#')[0]
             if not target_url or not validate_local_ip(target_url):
                 self.send_json({'error': 'Proxy only available for local URLs'}, 403)
                 return

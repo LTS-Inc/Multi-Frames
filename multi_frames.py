@@ -5932,10 +5932,12 @@ def render_main_page(user, config):
         """
         content = f'{widgets_html}{command_script}'
     else:
+        iframe_proxy_enabled = config["settings"].get("iframe_proxy", False)
         iframe_html = ""
         for i, iframe in enumerate(iframes):
             name = escape_html(iframe.get("name", f"Frame {i+1}"))
             url = escape_html(iframe.get("url", ""))
+            raw_url = iframe.get("url", "")
             height = iframe.get("height", 400)
             width = iframe.get("width", 100)  # percentage
             show_url = iframe.get("show_url", True)
@@ -6038,10 +6040,14 @@ def render_main_page(user, config):
                 iframe_inner = f'<div class="embed-container" style="{embed_wrapper_style}">{sandboxed_embed}</div>'
             else:
                 # Regular iframe with URL
+                # Use proxy URL for local targets when iframe_proxy is enabled
+                iframe_url = url
+                if iframe_proxy_enabled and raw_url and validate_local_ip(raw_url):
+                    iframe_url = f'/proxy/{i}'
                 if wrapper_style_str:
-                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe></div>'
+                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe></div>'
                 else:
-                    iframe_inner = f'<iframe id="iframe-{i}" src="{url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe>'
+                    iframe_inner = f'<iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe>'
             
             # Fallback placeholder (hidden by default)
             fallback_div = f'<div id="fallback-{i}" class="iframe-fallback" style="display:none;height:{height}px;"></div>'
@@ -7083,6 +7089,16 @@ def render_admin_page(user, config, message=None, error=None):
                     <select name="auto_fullscreen" style="width:auto;">
                         <option value="0" {"selected" if not config['settings'].get('auto_fullscreen', False) else ""}>Off</option>
                         <option value="1" {"selected" if config['settings'].get('auto_fullscreen', False) else ""}>On</option>
+                    </select>
+                </div>
+                <div class="toggle-row" style="padding:1rem;background:var(--bg-primary);border-radius:var(--radius);margin-bottom:1rem;">
+                    <div>
+                        <label style="margin-bottom:0;">iFrame Proxy</label>
+                        <small style="display:block;color:var(--text-secondary);margin-top:0.25rem;">Proxy local iFrame URLs through the server to avoid mixed content issues when accessing remotely</small>
+                    </div>
+                    <select name="iframe_proxy" style="width:auto;">
+                        <option value="0" {"selected" if not config['settings'].get('iframe_proxy', False) else ""}>Off</option>
+                        <option value="1" {"selected" if config['settings'].get('iframe_proxy', False) else ""}>On</option>
                     </select>
                 </div>
                 <button type="submit">Save Settings</button>
@@ -9767,6 +9783,103 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     'message': 'Not running on Raspberry Pi'
                 })
         
+        elif path.startswith('/proxy/'):
+            # Reverse proxy for local iframe URLs - avoids mixed content when accessing remotely
+            if not user:
+                self.send_json({'error': 'Authentication required'}, 401)
+                return
+
+            if not config["settings"].get("iframe_proxy", False):
+                self.send_html(render_page("Proxy Disabled", '<div class="card"><h2>Proxy Disabled</h2><p>iFrame proxy is not enabled in settings.</p></div>', user, config), 403)
+                return
+
+            # Extract iframe index and sub-path: /proxy/0/sub/path
+            proxy_path = path[len('/proxy/'):]
+            parts = proxy_path.split('/', 1)
+            try:
+                iframe_idx = int(parts[0])
+            except (ValueError, IndexError):
+                self.send_json({'error': 'Invalid proxy path'}, 400)
+                return
+
+            iframes = config.get("iframes", [])
+            if iframe_idx < 0 or iframe_idx >= len(iframes):
+                self.send_json({'error': 'Invalid iframe index'}, 404)
+                return
+
+            target_url = iframes[iframe_idx].get("url", "")
+            if not target_url or not validate_local_ip(target_url):
+                self.send_json({'error': 'Proxy only available for local URLs'}, 403)
+                return
+
+            # Build the proxied URL with sub-path and query string
+            parsed_target = urlparse(target_url)
+            sub_path = '/' + parts[1] if len(parts) > 1 else parsed_target.path or '/'
+            query_string = self.path.split('?', 1)[1] if '?' in self.path else ''
+
+            try:
+                import http.client
+                conn_host = parsed_target.hostname
+                conn_port = parsed_target.port or (443 if parsed_target.scheme == 'https' else 80)
+
+                if parsed_target.scheme == 'https':
+                    import ssl
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                    conn = http.client.HTTPSConnection(conn_host, conn_port, context=ctx, timeout=10)
+                else:
+                    conn = http.client.HTTPConnection(conn_host, conn_port, timeout=10)
+
+                request_path = sub_path
+                if query_string:
+                    request_path += '?' + query_string
+
+                conn.request('GET', request_path, headers={
+                    'Host': parsed_target.netloc,
+                    'User-Agent': 'Multi-Frames/1.4.6 Proxy',
+                    'Accept': '*/*'
+                })
+                resp = conn.getresponse()
+                body = resp.read()
+                conn.close()
+
+                content_type = resp.getheader('Content-Type', 'text/html')
+
+                # Rewrite URLs in HTML responses so relative links route through proxy
+                if 'text/html' in content_type:
+                    try:
+                        charset = 'utf-8'
+                        if 'charset=' in content_type:
+                            charset = content_type.split('charset=')[1].split(';')[0].strip()
+                        html_text = body.decode(charset, errors='replace')
+
+                        # Inject <base> tag so relative resources resolve to the target origin
+                        base_origin = f"{parsed_target.scheme}://{parsed_target.netloc}"
+                        base_tag = f'<base href="{base_origin}/">'
+
+                        # Inject base tag after <head> or at start
+                        if '<head>' in html_text.lower():
+                            html_text = re.sub(r'(<head[^>]*>)', r'\1' + base_tag, html_text, count=1, flags=re.IGNORECASE)
+                        elif '<html' in html_text.lower():
+                            html_text = re.sub(r'(<html[^>]*>)', r'\1<head>' + base_tag + '</head>', html_text, count=1, flags=re.IGNORECASE)
+                        else:
+                            html_text = base_tag + html_text
+
+                        body = html_text.encode(charset, errors='replace')
+                    except Exception:
+                        pass
+
+                self.send_response(resp.status)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', len(body))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                server_logger.error(f"Proxy error for iframe {iframe_idx}: {e}")
+                self.send_json({'error': f'Proxy request failed: {str(e)}'}, 502)
+
         elif path == '/api/ping':
             # Simple ping endpoint for connectivity check
             self.send_json({'status': 'ok', 'timestamp': datetime.now().isoformat()})
@@ -10400,6 +10513,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             config["settings"]["grid_columns"] = max(1, min(6, int(data.get('grid_columns', 2))))
             config["settings"]["refresh_interval"] = max(0, min(3600, int(data.get('refresh_interval', 0))))
             config["settings"]["auto_fullscreen"] = data.get('auto_fullscreen') == '1'
+            config["settings"]["iframe_proxy"] = data.get('iframe_proxy') == '1'
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Settings saved"))
         

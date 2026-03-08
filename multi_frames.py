@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.4.5
+Multi-Frames v1.4.6
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -29,6 +29,13 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.4.6 (2026-03-08)
+        - Fixed tunnel "Not found" when clicking Admin/Help links inside tunnel view
+        - Tunnel proxy now rewrites in-page URLs (links, forms, fetch, XHR) to route
+          through the proxy path so navigation works within the tunnel iframe
+        - Added POST support to tunnel proxy for admin panel form submissions
+        - Device tunnel handler now forwards POST request bodies to local server
+
     v1.4.5 (2026-03-05)
         - Fixed tunnel remote view black screen: tunnel proxy requests now include
           an authenticated session cookie so the local server serves the dashboard
@@ -275,7 +282,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.5"
+VERSION = "1.4.6"
 VERSION_DATE = "2026-03-05"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -1348,15 +1355,21 @@ class CloudAgent:
         method = msg.get('method', 'GET')
         path = msg.get('path', '/')
         headers = msg.get('headers', {})
+        body = msg.get('body', None)
 
         try:
             # Inject tunnel session cookie so local server serves authenticated content
             if self._tunnel_session_id:
                 headers['Cookie'] = f'session={self._tunnel_session_id}'
 
+            # Set Content-Length for POST bodies
+            body_bytes = body.encode('utf-8') if body else None
+            if body_bytes:
+                headers['Content-Length'] = str(len(body_bytes))
+
             # Connect to local webserver
             conn = http.client.HTTPConnection('127.0.0.1', self._get_local_server_port(), timeout=15)
-            conn.request(method, path, headers=headers)
+            conn.request(method, path, body=body_bytes, headers=headers)
             resp = conn.getresponse()
 
             # Follow redirects (e.g. / -> /login) within the local server

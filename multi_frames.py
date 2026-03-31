@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.4.6
+Multi-Frames v1.4.7
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -29,6 +29,11 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.4.7 (2026-03-31)
+        - Fixed iframe proxy breaking local iframe display: proxy now only activates
+          for remote (non-local) clients where mixed content is actually an issue
+        - Local clients load iframes directly without server-side proxying
+
     v1.4.6 (2026-03-08)
         - Fixed tunnel "Not found" when clicking Admin/Help links inside tunnel view
         - Tunnel proxy now rewrites in-page URLs (links, forms, fetch, XHR) to route
@@ -282,8 +287,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.6"
-VERSION_DATE = "2026-03-05"
+VERSION = "1.4.7"
+VERSION_DATE = "2026-03-31"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -9853,7 +9858,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
                 conn.request('GET', request_path, headers={
                     'Host': parsed_target.netloc,
-                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.6 Proxy)',
+                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.7 Proxy)',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Encoding': 'identity'
                 })
@@ -9880,7 +9885,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         request_path = redirect_url
                     conn.request('GET', request_path, headers={
                         'Host': f'{conn_host}:{conn_port}',
-                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.6 Proxy)',
+                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.7 Proxy)',
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                         'Accept-Encoding': 'identity'
                     })

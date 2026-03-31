@@ -14,6 +14,8 @@ Tracking planned optimizations, security hardening, and improvements.
 
 - [ ] **Add CSRF protection** — No anti-CSRF tokens on any POST form. A malicious page can trigger admin actions (add user, change settings) through victim's session. Generate a per-session token, embed in forms, validate on POST.
 
+- [ ] **Fix SSRF in proxy redirect handling** — The `/proxy/` handler follows HTTP redirects without re-validating the target against `validate_local_ip()` (`multi_frames.py:9869`). A local server can redirect to an external host, letting the proxy fetch arbitrary URLs. Re-validate each redirect target before following.
+
 ### High
 
 - [ ] **Authenticate info-leak endpoints** — `/api/client-info` and `/api/pi-status` require no auth and expose IP, server port, Pi model, temperature, hostname, memory, and network config. Gate behind authentication.
@@ -22,6 +24,8 @@ Tracking planned optimizations, security hardening, and improvements.
 
 - [ ] **Harden session cookies** — Ensure `HttpOnly`, `SameSite=Strict`, and `Secure` (when behind HTTPS) flags are set consistently on all Set-Cookie responses. Explicitly delete sessions on logout.
 
+- [ ] **Fix rate-limit bypass via header spoofing** — Login rate limiting trusts `X-Forwarded-For` and `X-Real-IP` headers (`multi_frames.py:9771`), which any client can set. Only trust forwarded headers when behind a known reverse proxy, otherwise use the socket IP.
+
 ### Medium
 
 - [ ] **Tighten proxy SSRF surface** — `validate_local_ip()` at `multi_frames.py:3099` allows `.local` and `.lan` hostnames which could resolve to unintended targets via DNS rebinding. Consider allowlist-only or resolve-then-check approach.
@@ -29,6 +33,10 @@ Tracking planned optimizations, security hardening, and improvements.
 - [ ] **Avoid innerHTML for dynamic content** — JS in help/diagnostics page uses `innerHTML` with server responses (e.g. `multi_frames.py:5139`). Switch to `textContent` or DOM element creation to eliminate DOM XSS risk.
 
 - [ ] **Set config file permissions** — `save_config()` doesn't restrict file permissions. Set `0600` on `~/.multi_frames_config.json` so only the owning user can read passwords/tokens.
+
+- [ ] **Re-enable SSL cert verification in proxy** — Proxy disables certificate verification (`ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE` at `multi_frames.py:9848`), allowing MITM on proxied HTTPS connections. Use default verification or make it configurable.
+
+- [ ] **Escape single quotes in `escape_html()`** — `escape_html()` at `multi_frames.py:3254` does not escape `'` to `&#39;`. While most attributes use double quotes, this is an incomplete mitigation. Add single-quote escaping for defense-in-depth.
 
 ---
 

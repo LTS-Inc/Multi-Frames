@@ -5,6 +5,15 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.7] - 2026-03-31
+
+### Fixed
+- **iFrame proxy breaking local display**: The iframe reverse proxy (added in v1.4.6) was rewriting local iframe URLs to `/proxy/N` even for clients on the local network, where mixed content is not an issue. The server-side proxy cannot properly handle JavaScript-heavy pages, WebSockets, or cookies, causing iframes to display incorrectly. The proxy now checks the client IP and only activates for remote (public) clients accessing through tunnels.
+
+### Changed
+- `render_main_page()` now accepts `client_ip` parameter to determine proxy behavior
+- Version bumped to 1.4.7
+
 ## [1.4.6] - 2026-03-08
 
 ### Fixed

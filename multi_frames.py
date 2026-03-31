@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.4.6
+Multi-Frames v1.4.7
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -29,6 +29,11 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.4.7 (2026-03-31)
+        - Fixed iframe proxy breaking local iframe display: proxy now only activates
+          for remote (non-local) clients where mixed content is actually an issue
+        - Local clients load iframes directly without server-side proxying
+
     v1.4.6 (2026-03-08)
         - Fixed tunnel "Not found" when clicking Admin/Help links inside tunnel view
         - Tunnel proxy now rewrites in-page URLs (links, forms, fetch, XHR) to route
@@ -282,8 +287,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.6"
-VERSION_DATE = "2026-03-05"
+VERSION = "1.4.7"
+VERSION_DATE = "2026-03-31"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -5841,7 +5846,7 @@ def render_widget(widget, config):
     '''
 
 
-def render_main_page(user, config):
+def render_main_page(user, config, client_ip=None):
     """Render the main iFrame display page."""
     iframes = config.get("iframes", [])
     widgets = config.get("widgets", [])
@@ -5932,7 +5937,16 @@ def render_main_page(user, config):
         """
         content = f'{widgets_html}{command_script}'
     else:
+        # Only proxy iframes when client is accessing remotely (mixed content fix)
+        # Local clients can load local iframe URLs directly without issues
         iframe_proxy_enabled = config["settings"].get("iframe_proxy", False)
+        if iframe_proxy_enabled and client_ip:
+            try:
+                client_addr = ipaddress.ip_address(client_ip)
+                if client_addr.is_private or client_addr.is_loopback:
+                    iframe_proxy_enabled = False
+            except ValueError:
+                pass
         iframe_html = ""
         for i, iframe in enumerate(iframes):
             name = escape_html(iframe.get("name", f"Frame {i+1}"))
@@ -9683,7 +9697,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
         if path == '/':
             if user:
-                self.send_html(render_main_page(user, config))
+                self.send_html(render_main_page(user, config, client_ip=self.client_address[0]))
             else:
                 self.redirect('/login')
         
@@ -9844,7 +9858,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
                 conn.request('GET', request_path, headers={
                     'Host': parsed_target.netloc,
-                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.6 Proxy)',
+                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.7 Proxy)',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Encoding': 'identity'
                 })
@@ -9871,7 +9885,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         request_path = redirect_url
                     conn.request('GET', request_path, headers={
                         'Host': f'{conn_host}:{conn_port}',
-                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.6 Proxy)',
+                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.7 Proxy)',
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                         'Accept-Encoding': 'identity'
                     })

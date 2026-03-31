@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.4.6-2026--03--08-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.4.7-2026--03--31-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -549,6 +549,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.4.7** | 2026-03-31 | Fix iframe proxy breaking local display, proxy only for remote clients |
 | **1.4.6** | 2026-03-08 | Fix tunnel navigation (Admin/Help links), add POST proxy support |
 | **1.4.5** | 2026-03-05 | Fix tunnel black screen, inject auth session into proxy requests |
 | **1.4.4** | 2026-03-05 | Fix tunnel proxy connection refused, use actual server port |

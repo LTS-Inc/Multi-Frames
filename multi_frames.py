@@ -5841,7 +5841,7 @@ def render_widget(widget, config):
     '''
 
 
-def render_main_page(user, config):
+def render_main_page(user, config, client_ip=None):
     """Render the main iFrame display page."""
     iframes = config.get("iframes", [])
     widgets = config.get("widgets", [])
@@ -5932,7 +5932,16 @@ def render_main_page(user, config):
         """
         content = f'{widgets_html}{command_script}'
     else:
+        # Only proxy iframes when client is accessing remotely (mixed content fix)
+        # Local clients can load local iframe URLs directly without issues
         iframe_proxy_enabled = config["settings"].get("iframe_proxy", False)
+        if iframe_proxy_enabled and client_ip:
+            try:
+                client_addr = ipaddress.ip_address(client_ip)
+                if client_addr.is_private or client_addr.is_loopback:
+                    iframe_proxy_enabled = False
+            except ValueError:
+                pass
         iframe_html = ""
         for i, iframe in enumerate(iframes):
             name = escape_html(iframe.get("name", f"Frame {i+1}"))
@@ -9683,7 +9692,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
         if path == '/':
             if user:
-                self.send_html(render_main_page(user, config))
+                self.send_html(render_main_page(user, config, client_ip=self.client_address[0]))
             else:
                 self.redirect('/login')
         

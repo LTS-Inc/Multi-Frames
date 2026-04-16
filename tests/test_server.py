@@ -165,6 +165,65 @@ class ServerIntegrationTests(unittest.TestCase):
         resp = self._get(f"/proxy/{idx}/", cookie=session)
         self.assertEqual(resp.status, 403)
 
+    def test_permissions_restrict_non_admin_user(self):
+        """Admin restricts alice to one iframe; alice's dashboard reflects it."""
+        mf = self.mf
+        cfg = mf.load_config()
+        iframe_a_id = mf.secrets.token_hex(4)
+        iframe_b_id = mf.secrets.token_hex(4)
+        cfg["iframes"] = [
+            {"id": iframe_a_id, "name": "DASHBOARD_ALPHA_MARKER",
+             "url": "http://127.0.0.1/", "use_embed_code": False,
+             "embed_code": "", "height": 200, "width": 100, "zoom": 100,
+             "allow_external": False},
+            {"id": iframe_b_id, "name": "DASHBOARD_BETA_MARKER",
+             "url": "http://127.0.0.1/", "use_embed_code": False,
+             "embed_code": "", "height": 200, "width": 100, "zoom": 100,
+             "allow_external": False},
+        ]
+        cfg["users"]["alice"] = {
+            "password_hash": mf.hash_password("wonderland"),
+            "is_admin": False,
+            "allowed_iframes": [iframe_a_id],
+            "allowed_widgets": None,
+        }
+        mf.save_config(cfg)
+
+        login = self._post_form("/login", {"username": "alice", "password": "wonderland"})
+        self.assertEqual(login.status, 302)
+        session = _extract_session(login.headers.get("Set-Cookie", ""))
+        home = self._get("/", cookie=session)
+        body = home.read().decode("utf-8", "replace")
+        self.assertIn("DASHBOARD_ALPHA_MARKER", body)
+        self.assertNotIn("DASHBOARD_BETA_MARKER", body)
+
+    def test_admin_always_sees_everything(self):
+        """Even if the admin's own record has an empty allow-list, admin sees all."""
+        mf = self.mf
+        cfg = mf.load_config()
+        iframe_a_id = mf.secrets.token_hex(4)
+        iframe_b_id = mf.secrets.token_hex(4)
+        cfg["iframes"] = [
+            {"id": iframe_a_id, "name": "ADMIN_SEES_ALPHA",
+             "url": "http://127.0.0.1/", "use_embed_code": False,
+             "embed_code": "", "height": 200, "width": 100, "zoom": 100,
+             "allow_external": False},
+            {"id": iframe_b_id, "name": "ADMIN_SEES_BETA",
+             "url": "http://127.0.0.1/", "use_embed_code": False,
+             "embed_code": "", "height": 200, "width": 100, "zoom": 100,
+             "allow_external": False},
+        ]
+        cfg["users"]["admin"]["allowed_iframes"] = []  # deny-all would apply if not bypassed
+        cfg["users"]["admin"]["allowed_widgets"] = []
+        mf.save_config(cfg)
+
+        login = self._post_form("/login", {"username": "admin", "password": "admin123"})
+        session = _extract_session(login.headers.get("Set-Cookie", ""))
+        home = self._get("/", cookie=session)
+        body = home.read().decode("utf-8", "replace")
+        self.assertIn("ADMIN_SEES_ALPHA", body)
+        self.assertIn("ADMIN_SEES_BETA", body)
+
     def test_proxy_rejects_redirect_to_external(self):
         """Regression for REVIEW.md §1.1 — will FAIL on unpatched code."""
         upstream = _RedirectingUpstream("http://example.com/")

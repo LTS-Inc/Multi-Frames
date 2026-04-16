@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.4.7-2026--03--31-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.4.8-2026--04--16-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -25,7 +25,7 @@ Built for home dashboards, kiosks, and digital signage
 
 <br>
 
-[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v140) • [Documentation](#-configuration)
+[Features](#-features) • [Quick Start](#-quick-start) • [What's New](#-whats-new-in-v148) • [Documentation](#-configuration)
 
 </div>
 
@@ -56,6 +56,7 @@ Built for home dashboards, kiosks, and digital signage
 - **Session authentication** — Secure token-based login
 - **Password hashing** — SHA-256 encryption
 - **Role-based access** — Admin and user accounts
+- **Per-user permissions** — Restrict visible iframes/widgets per user
 - **Rate limiting** — Login attempt protection
 - **Sandboxed iFrames** — Isolated content display
 
@@ -206,7 +207,7 @@ Seven organized sections with mobile-friendly navigation:
 | 📺 | **iFrames** | Add, edit, reorder, delete frames |
 | 🎨 | **Appearance** | Colors, backgrounds, header/footer |
 | ✨ | **Branding** | Upload logos, favicons, icons |
-| 👥 | **Users** | Manage accounts, change passwords |
+| 👥 | **Users** | Manage accounts, change passwords, set per-user iframe/widget permissions |
 | 🌐 | **Network** | Configure IP settings, enable mDNS |
 | ⚙️ | **Settings** | Page title, grid layout, refresh |
 | 🔧 | **System** | Logs, diagnostics, Pi controls, backup/restore |
@@ -240,7 +241,42 @@ http://localhost:8080
 
 <br>
 
-## 🆕 What's New in v1.4.0
+## 🆕 What's New in v1.4.8
+
+<table>
+<tr>
+<td>
+
+### 👤 Per-User Permissions
+
+- Admin can restrict visible iframes/widgets per user
+- New **Permissions** panel on each non-admin row in the admin Users list
+- Checkbox groups for iframes and widgets, plus **Reset (see all)**
+- Stable 8-char IDs survive renames and reordering
+- Admins always bypass filtering — they see everything
+
+</td>
+<td>
+
+### 🧪 Automated Test Suite
+
+- Zero-dependency stdlib runner at `tests/run_tests.py`
+- 39 tests covering auth, SSRF, config, permissions, and worker
+- Regression tests for the proxy redirect SSRF
+- `node --check` on the Cloudflare Worker
+- See `tests/README.md` for the manual release checklist
+
+</td>
+</tr>
+</table>
+
+<br>
+
+---
+
+<br>
+
+## 🆕 Previously — v1.4.0
 
 <table>
 <tr>
@@ -549,6 +585,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.4.8** | 2026-04-16 | Per-user iframe/widget permissions, stable IDs with migration, test suite, codebase review |
 | **1.4.7** | 2026-03-31 | Fix iframe proxy breaking local display, proxy only for remote clients |
 | **1.4.6** | 2026-03-08 | Fix tunnel navigation (Admin/Help links), add POST proxy support |
 | **1.4.5** | 2026-03-05 | Fix tunnel black screen, inject auth session into proxy requests |

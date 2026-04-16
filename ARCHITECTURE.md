@@ -365,10 +365,16 @@ multi_frames/
 │  │ Session-Based Authentication                         │   │
 │  │                                                      │   │
 │  │ - 64-byte random session tokens (secrets module)     │   │
-│  │ - SHA-256 password hashing with salt                 │   │
+│  │ - SHA-256 password hashing (unsalted today;          │   │
+│  │   PBKDF2 migration planned in TODO.md)               │   │
 │  │ - Session stored in memory (lost on restart)         │   │
-│  │ - Rate limiting: 5 attempts per 5 minutes            │   │
+│  │ - Rate limiting: 5 attempts per 15 minutes           │   │
 │  │ - Admin flag per user for privileged access          │   │
+│  │ - Per-user visibility allow-lists for iframes and    │   │
+│  │   widgets (allowed_iframes / allowed_widgets).       │   │
+│  │   None/missing = see all (backward compat);          │   │
+│  │   empty list = see none; list of stable IDs =        │   │
+│  │   whitelist. Admins bypass filtering.                │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                                                              │
 │  CLOUD BACKEND                                               │
@@ -392,6 +398,45 @@ multi_frames/
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Per-User Permissions (v1.4.8+)
+
+```
+                ┌────────────────────────────────────┐
+                │    Admin opens Admin → Users       │
+                │    Clicks "Permissions" on row     │
+                └───────────────┬────────────────────┘
+                                │
+               POST /admin/user/permissions
+               body: username, iframe_ids[], widget_ids[],
+                     iframes_submitted=1, widgets_submitted=1
+                     (or reset=1 to clear)
+                                │
+                                ▼
+        config["users"][name]["allowed_iframes"] = [ids...]
+        config["users"][name]["allowed_widgets"] = [ids...]
+                                │
+                                ▼
+                       save_config(config)
+                                │
+                                ▼
+        ─────────────────────────────────────────────
+                    On the dashboard GET /
+        ─────────────────────────────────────────────
+                                │
+                                ▼
+        render_main_page(user, config)
+                → filter_by_permissions(iframes, widgets, user_record)
+                    ├─ user_record.is_admin → return full lists
+                    ├─ allowed_iframes is None → no iframe filter
+                    ├─ allowed_iframes == []  → hide all iframes
+                    └─ list of IDs            → whitelist by id
+```
+
+Stable IDs are assigned on iframe/widget creation and preserved on
+edit. `_ensure_ids()` backfills older configs and any cloud-pulled
+config on load. Permissions reference these IDs, so renaming an iframe
+or reordering the list preserves the user's view.
 
 ## Frontend Architecture
 

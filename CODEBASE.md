@@ -24,8 +24,8 @@ The main server file (~10,000 lines) contains all functionality in a single depl
 ### Constants (Lines 196-200)
 
 ```python
-VERSION = "1.4.7"           # Current version
-VERSION_DATE = "2026-03-31" # Release date
+VERSION = "1.4.8"           # Current version
+VERSION_DATE = "2026-04-16" # Release date
 DEFAULT_PORT = 8080         # Default HTTP port
 DEFAULT_HOST = "0.0.0.0"    # Listen on all interfaces
 ```
@@ -124,9 +124,12 @@ Main HTTP request handler extending `SimpleHTTPRequestHandler`.
 |------|------|-------------|
 | `/login` | No | Process login |
 | `/api/send-command` | Yes | Send network command |
-| `/admin/iframe/*` | Admin | Manage iFrames |
-| `/admin/widget/*` | Admin | Manage widgets |
-| `/admin/user/*` | Admin | Manage users |
+| `/admin/iframe/*` | Admin | Manage iFrames (add, edit, delete, move). Injects/preserves stable `id`. |
+| `/admin/widget/*` | Admin | Manage widgets (add, edit, delete, move). Injects/preserves stable `id`. |
+| `/admin/user/add` | Admin | Create a user |
+| `/admin/user/delete` | Admin | Delete a user |
+| `/admin/user/change-password` | Admin | Change a user's password |
+| `/admin/user/permissions` | Admin | Set `allowed_iframes` / `allowed_widgets` allow-lists for a user. Body fields: `username`, multi-valued `iframe_ids[]` / `widget_ids[]`, sentinels `iframes_submitted=1` / `widgets_submitted=1`, optional `reset=1` to clear both lists. Unknown IDs are silently dropped. |
 | `/admin/settings/*` | Admin | System settings |
 
 ### Function: load_config() (Lines ~300-400)
@@ -156,17 +159,47 @@ def save_config(config):
 ### Function: hash_password() (Lines ~450-480)
 
 ```python
-def hash_password(password, salt=None):
-    """Hash password using SHA-256 with salt.
+def hash_password(password):
+    """Hash password using SHA-256 (hex digest).
+
+    NOTE: current implementation is unsalted SHA-256. A PBKDF2
+    migration is tracked in TODO.md.
 
     Args:
         password: Plain text password.
-        salt: Optional salt (generated if not provided).
 
     Returns:
-        tuple: (hashed_password, salt)
+        str: 64-char hex digest of SHA-256(password).
     """
 ```
+
+### Function: _ensure_ids(cfg) (near load_config)
+
+Backfills a stable 8-char hex `id` on every iframe and widget that
+lacks one. Returns `True` when any IDs were assigned so the caller
+(load_config) can persist the migration exactly once.
+
+```python
+def _ensure_ids(cfg):
+    changed = False
+    for key in ("iframes", "widgets"):
+        for item in (cfg.get(key) or []):
+            if not item.get("id"):
+                item["id"] = secrets.token_hex(4)
+                changed = True
+    return changed
+```
+
+### Function: filter_by_permissions(iframes, widgets, user_record)
+
+Applies the per-user visibility rules. Called inside
+`render_main_page()` with the current user's record.
+
+- Admin records bypass filtering (return the inputs unchanged).
+- `None` / missing on an allow-list means "see all" (backward compat).
+- `[]` means "see none".
+- A list of IDs is a strict whitelist. Unknown IDs are silently
+  ignored — permissions self-heal against deleted iframes/widgets.
 
 ### Function: validate_user() (Lines ~480-520)
 
@@ -693,24 +726,29 @@ Each tunnel session gets its own DO instance, keyed by tunnel ID via `idFromName
 {
   "users": {
     "admin": {
-      "password": "hashed-password",
-      "salt": "random-salt",
-      "is_admin": true
+      "password_hash": "sha256-hex-digest",    // unsalted SHA-256 today;
+                                                // PBKDF2 migration in TODO.md
+      "is_admin": true,
+      "allowed_iframes": null,  // optional; null/missing = see all,
+                                // [] = see none, ["id",...] = whitelist
+      "allowed_widgets": null   // same semantics as allowed_iframes
     }
   },
 
   "iframes": [
     {
-      "id": "uuid",
+      "id": "8-char-hex",  // stable id (e.g. "a1b2c3d4") — permissions
+                           // reference this, not list index. Backfilled
+                           // by _ensure_ids() on load.
       "name": "Home Assistant",
       "url": "http://homeassistant.local:8123",
       "height": 400,
-      "width": 50,        // percentage
-      "zoom": 100,        // percentage
+      "width": 50,         // percentage
+      "zoom": 100,         // percentage
       "show_url": true,
       "show_header": true,
       "show_status": true,
-      "header_text": "",  // custom header (optional)
+      "header_text": "",   // custom header (optional)
       "border_style": "default",
       "border_color": "",
       "allow_external": false,
@@ -721,12 +759,15 @@ Each tunnel session gets its own DO instance, keyed by tunnel ID via `idFromName
 
   "widgets": [
     {
-      "id": "uuid",
+      "id": "8-char-hex", // stable id, same role as iframe id
       "type": "clock",    // clock, weather, button, text, image, pi_info
       "name": "Clock",
-      "config": {
-        // Widget-specific config
-      }
+      "content": "...",
+      "size": "medium",
+      "bg_color": "#141416",
+      "text_color": "#e8e8e8",
+      "border_radius": 8,
+      "enabled": true
     }
   ],
 

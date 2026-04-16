@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.4.7
+Multi-Frames v1.4.8
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -29,6 +29,14 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.4.8 (2026-04-16)
+        - Per-user iframe and widget visibility: admins can restrict which
+          iframes and widgets each non-admin user sees on the dashboard via
+          a new "Permissions" panel in the admin Users list
+        - Stable 8-char hex IDs backfilled onto every iframe and widget so
+          permissions survive renames and reordering
+        - Unset permissions preserve existing behavior (user sees everything);
+          admins always bypass filtering
     v1.4.7 (2026-03-31)
         - Fixed iframe proxy breaking local iframe display: proxy now only activates
           for remote (non-local) clients where mixed content is actually an issue
@@ -287,8 +295,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.7"
-VERSION_DATE = "2026-03-31"
+VERSION = "1.4.8"
+VERSION_DATE = "2026-04-16"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -3025,16 +3033,37 @@ def clear_failed_logins(client_ip):
 # Utility Functions
 # =============================================================================
 
+def _ensure_ids(cfg):
+    """Backfill stable 8-char hex IDs on iframes and widgets that lack one.
+
+    Returns True if any ID was assigned (caller should persist the config).
+    IDs are used by per-user permission allow-lists so permissions survive
+    reordering and renaming.
+    """
+    changed = False
+    for key in ("iframes", "widgets"):
+        for item in (cfg.get(key) or []):
+            if not item.get("id"):
+                item["id"] = secrets.token_hex(4)
+                changed = True
+    return changed
+
+
 def load_config():
     """Load configuration from JSON file or create default."""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
-                return json.load(f)
+                cfg = json.load(f)
+            if _ensure_ids(cfg):
+                save_config(cfg)
+            return cfg
         except (json.JSONDecodeError, IOError):
             pass
-    save_config(DEFAULT_CONFIG)
-    return DEFAULT_CONFIG.copy()
+    default_copy = json.loads(json.dumps(DEFAULT_CONFIG))
+    _ensure_ids(default_copy)
+    save_config(default_copy)
+    return default_copy
 
 def save_config(config):
     """
@@ -5846,10 +5875,32 @@ def render_widget(widget, config):
     '''
 
 
+def filter_by_permissions(iframes, widgets, user_record):
+    """Apply per-user visibility rules.
+
+    ``None`` (or missing) on an allow-list means "see all" (backward compat).
+    An empty list means "see none". A populated list is a whitelist of IDs.
+    Admins bypass filtering.
+    """
+    if user_record.get("is_admin"):
+        return iframes, widgets
+    allowed_if = user_record.get("allowed_iframes")
+    allowed_wg = user_record.get("allowed_widgets")
+    if allowed_if is not None:
+        iframes = [f for f in iframes if f.get("id") in allowed_if]
+    if allowed_wg is not None:
+        widgets = [w for w in widgets if w.get("id") in allowed_wg]
+    return iframes, widgets
+
+
 def render_main_page(user, config, client_ip=None):
     """Render the main iFrame display page."""
-    iframes = config.get("iframes", [])
-    widgets = config.get("widgets", [])
+    user_record = config.get("users", {}).get(user, {}) if user else {}
+    iframes, widgets = filter_by_permissions(
+        config.get("iframes", []),
+        config.get("widgets", []),
+        user_record,
+    )
     cols = config["settings"].get("grid_columns", 2)
     refresh = config["settings"].get("refresh_interval", 0)
     fallback_config = config.get("fallback_image", {})
@@ -6533,11 +6584,86 @@ def render_admin_page(user, config, message=None, error=None):
     
     # Users section
     users_list = ""
+    all_iframes_for_perms = config.get("iframes", [])
+    all_widgets_for_perms = config.get("widgets", [])
     for username, udata in config.get("users", {}).items():
         is_admin_badge = "Admin" if udata.get("is_admin") else "User"
         is_current_user = username == user
+        is_user_admin = bool(udata.get("is_admin"))
         user_id = f"user-{abs(hash(username)) % 100000}"
-        
+
+        # Build the Permissions panel for non-admin users. Admins always
+        # see everything, so they get no panel.
+        perms_button = ""
+        perms_panel = ""
+        if not is_user_admin:
+            perms_button = (
+                f'<button type="button" class="btn btn-secondary btn-sm" '
+                f'onclick="togglePermissions(\'{user_id}\')">Permissions</button>'
+            )
+
+            allowed_iframes = udata.get("allowed_iframes")
+            allowed_widgets = udata.get("allowed_widgets")
+            # None => default "see all": all boxes checked.
+            iframe_checked = (lambda fid: allowed_iframes is None or fid in allowed_iframes)
+            widget_checked = (lambda wid: allowed_widgets is None or wid in allowed_widgets)
+
+            if all_iframes_for_perms:
+                iframe_boxes = "".join(
+                    f'''<label style="display:block;margin:0.25rem 0;">
+                        <input type="checkbox" name="iframe_ids" value="{escape_html(f.get("id", ""))}" {"checked" if iframe_checked(f.get("id")) else ""}>
+                        {escape_html(f.get("name", "(unnamed)"))}
+                        <small style="color:var(--muted);">{escape_html(f.get("id", ""))}</small>
+                    </label>'''
+                    for f in all_iframes_for_perms if f.get("id")
+                )
+            else:
+                iframe_boxes = '<em style="color:var(--muted);">No iFrames configured.</em>'
+
+            if all_widgets_for_perms:
+                widget_boxes = "".join(
+                    f'''<label style="display:block;margin:0.25rem 0;">
+                        <input type="checkbox" name="widget_ids" value="{escape_html(w.get("id", ""))}" {"checked" if widget_checked(w.get("id")) else ""}>
+                        {escape_html(w.get("name", "(unnamed)"))}
+                        <small style="color:var(--muted);">{escape_html(w.get("id", ""))}</small>
+                    </label>'''
+                    for w in all_widgets_for_perms if w.get("id")
+                )
+            else:
+                widget_boxes = '<em style="color:var(--muted);">No widgets configured.</em>'
+
+            default_note = "" if allowed_iframes is not None or allowed_widgets is not None else (
+                '<p style="color:var(--muted);font-size:0.85rem;margin:0 0 0.75rem;">'
+                'This user currently sees everything (no permissions set). '
+                'Uncheck items below to restrict the view.</p>'
+            )
+
+            perms_panel = f'''
+            <div class="edit-panel" id="{user_id}-perms" style="display:none;">
+                <form method="POST" action="/admin/user/permissions">
+                    <input type="hidden" name="username" value="{escape_html(username)}">
+                    <input type="hidden" name="iframes_submitted" value="1">
+                    <input type="hidden" name="widgets_submitted" value="1">
+                    {default_note}
+                    <div class="inline-form" style="align-items:flex-start;">
+                        <fieldset class="form-group" style="flex:1;">
+                            <legend>Visible iFrames</legend>
+                            {iframe_boxes}
+                        </fieldset>
+                        <fieldset class="form-group" style="flex:1;">
+                            <legend>Visible Widgets</legend>
+                            {widget_boxes}
+                        </fieldset>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;margin-top:1rem;">
+                        <button type="submit">Save Permissions</button>
+                        <button type="submit" name="reset" value="1" class="btn btn-secondary">Reset (see all)</button>
+                        <button type="button" class="btn btn-secondary" onclick="togglePermissions('{user_id}')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+            '''
+
         users_list += f"""
         <li>
             <div class="item-row">
@@ -6547,6 +6673,7 @@ def render_admin_page(user, config, message=None, error=None):
                 </div>
                 <div class="item-actions">
                     <button type="button" class="btn btn-secondary btn-sm" onclick="togglePasswordChange('{user_id}')">Change Password</button>
+                    {perms_button}
                     {"" if is_current_user else f'''
                     <form method="POST" action="/admin/user/delete" style="display:inline;">
                         <input type="hidden" name="username" value="{escape_html(username)}">
@@ -6574,6 +6701,7 @@ def render_admin_page(user, config, message=None, error=None):
                     </div>
                 </form>
             </div>
+            {perms_panel}
         </li>
         """
     if not users_list:
@@ -6687,7 +6815,23 @@ def render_admin_page(user, config, message=None, error=None):
             if (form) form.reset();
         }}
     }}
-    
+
+    function togglePermissions(userId) {{
+        var panel = document.getElementById(userId + '-perms');
+        if (!panel) {{
+            console.error('Permissions panel not found for:', userId);
+            return;
+        }}
+        if (panel.style.display === 'none' || panel.style.display === '') {{
+            document.querySelectorAll('[id$="-perms"].edit-panel').forEach(function(p) {{
+                p.style.display = 'none';
+            }});
+            panel.style.display = 'block';
+        }} else {{
+            panel.style.display = 'none';
+        }}
+    }}
+
     function switchTab(tabId) {{
         // Hide all panels
         document.querySelectorAll('.tab-panel').forEach(function(panel) {{
@@ -9671,7 +9815,13 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             # Return raw JSON body for API endpoints
             return {'_json_body': post_body.decode('utf-8'), '_is_json': True}
         else:
-            return {k: v[0] for k, v in parse_qs(post_body.decode('utf-8')).items()}
+            parsed = parse_qs(post_body.decode('utf-8'))
+            result = {k: v[0] for k, v in parsed.items()}
+            # Expose raw multi-value lists so handlers that need them (e.g.
+            # permission checkboxes) can read them without changing the
+            # default single-value behavior relied on everywhere else.
+            result['_multi'] = parsed
+            return result
     
     def do_GET(self):
         """Handle GET requests with comprehensive error handling."""
@@ -9858,7 +10008,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
                 conn.request('GET', request_path, headers={
                     'Host': parsed_target.netloc,
-                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.7 Proxy)',
+                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.8 Proxy)',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Encoding': 'identity'
                 })
@@ -9885,7 +10035,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         request_path = redirect_url
                     conn.request('GET', request_path, headers={
                         'Host': f'{conn_host}:{conn_port}',
-                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.7 Proxy)',
+                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.8 Proxy)',
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                         'Accept-Encoding': 'identity'
                     })
@@ -10188,6 +10338,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     self.send_html(render_admin_page(user, config, error="Embed code is required when 'Use Embed Code' is enabled"))
                 else:
                     new_iframe = {
+                        "id": secrets.token_hex(4),
                         "name": name,
                         "url": "",
                         "height": max(100, min(2000, height)),
@@ -10212,6 +10363,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     self.send_html(render_admin_page(user, config, error="Only local/private IP addresses are allowed. Enable 'Allow External URLs' in Advanced Options for public websites."))
                 elif name and url:
                     new_iframe = {
+                        "id": secrets.token_hex(4),
                         "name": name,
                         "url": url,
                         "height": max(100, min(2000, height)),
@@ -10282,7 +10434,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 elif not use_embed_code and not allow_external and not validate_local_ip(url):
                     self.send_html(render_admin_page(user, config, error="Only local/private IP addresses are allowed. Enable 'Allow External URLs' for public websites."))
                 else:
+                    existing = config["iframes"][index]
                     config["iframes"][index] = {
+                        "id": existing.get("id") or secrets.token_hex(4),
                         "name": name,
                         "url": url if not use_embed_code else "",
                         "height": max(100, min(2000, height)),
@@ -10492,7 +10646,44 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     self.send_html(render_admin_page(user, config, message=f"Password updated for '{target_username}'"))
                 else:
                     self.send_html(render_admin_page(user, config, error=err))
-        
+
+        elif path == '/admin/user/permissions':
+            target_username = data.get('username', '').strip()
+            multi = data.get('_multi', {}) or {}
+
+            if not target_username or target_username not in config.get("users", {}):
+                self.send_html(render_admin_page(user, config, error="User not found"))
+            elif data.get('reset') == '1':
+                config["users"][target_username]["allowed_iframes"] = None
+                config["users"][target_username]["allowed_widgets"] = None
+                success, err = save_config(config)
+                if success:
+                    server_logger.info(f"Permissions reset (see all) for user: {target_username} by admin: {user}")
+                    self.send_html(render_admin_page(user, config, message=f"Permissions reset for '{target_username}' — sees everything"))
+                else:
+                    self.send_html(render_admin_page(user, config, error=err))
+            else:
+                valid_iframe_ids = {f.get("id") for f in config.get("iframes", []) if f.get("id")}
+                valid_widget_ids = {w.get("id") for w in config.get("widgets", []) if w.get("id")}
+
+                if data.get('iframes_submitted') == '1':
+                    submitted_iframes = multi.get('iframe_ids', []) or []
+                    config["users"][target_username]["allowed_iframes"] = [
+                        i for i in submitted_iframes if i in valid_iframe_ids
+                    ]
+                if data.get('widgets_submitted') == '1':
+                    submitted_widgets = multi.get('widget_ids', []) or []
+                    config["users"][target_username]["allowed_widgets"] = [
+                        i for i in submitted_widgets if i in valid_widget_ids
+                    ]
+
+                success, err = save_config(config)
+                if success:
+                    server_logger.info(f"Permissions updated for user: {target_username} by admin: {user}")
+                    self.send_html(render_admin_page(user, config, message=f"Permissions updated for '{target_username}'"))
+                else:
+                    self.send_html(render_admin_page(user, config, error=err))
+
         elif path == '/admin/password-reset/set':
             request_id = data.get('request_id', '')
             new_password = data.get('new_password', '')
@@ -10635,6 +10826,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_html(render_admin_page(user, config, error="Widget name is required"))
             else:
                 new_widget = {
+                    "id": secrets.token_hex(4),
                     "name": name[:50],
                     "type": wtype,
                     "size": size,
@@ -10665,7 +10857,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 elif not name:
                     self.send_html(render_admin_page(user, config, error="Widget name is required"))
                 else:
+                    existing_widget = config["widgets"][index]
                     config["widgets"][index] = {
+                        "id": existing_widget.get("id") or secrets.token_hex(4),
                         "name": name[:50],
                         "type": wtype,
                         "size": size,
@@ -11897,7 +12091,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME, uptime_tracker
 
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.11 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description=f'Multi-Frames v{VERSION} - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

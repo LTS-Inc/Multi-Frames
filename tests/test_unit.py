@@ -145,5 +145,101 @@ class SessionTests(_MFTestBase):
         self.assertIsNone(self.mf.get_session("does-not-exist"))
 
 
+class IdBackfillTests(_MFTestBase):
+    def test_ensure_ids_fills_missing(self):
+        cfg = {
+            "iframes": [{"name": "a"}, {"name": "b", "id": "keepmeid"}],
+            "widgets": [{"name": "w1"}],
+        }
+        changed = self.mf._ensure_ids(cfg)
+        self.assertTrue(changed)
+        self.assertEqual(cfg["iframes"][1]["id"], "keepmeid")
+        # Every item now has an id; newly-generated ones are 8-char hex.
+        self.assertIn("id", cfg["iframes"][0])
+        self.assertEqual(len(cfg["iframes"][0]["id"]), 8)
+        int(cfg["iframes"][0]["id"], 16)
+        self.assertIn("id", cfg["widgets"][0])
+        self.assertEqual(len(cfg["widgets"][0]["id"]), 8)
+        int(cfg["widgets"][0]["id"], 16)
+
+    def test_ensure_ids_noop_when_all_present(self):
+        cfg = {
+            "iframes": [{"name": "a", "id": "aa11aa11"}],
+            "widgets": [],
+        }
+        self.assertFalse(self.mf._ensure_ids(cfg))
+
+    def test_load_config_backfills_and_persists(self):
+        # Write a pre-upgrade config with no IDs.
+        import json
+        raw = {
+            "users": {"admin": {"password_hash": "x", "is_admin": True}},
+            "iframes": [{"name": "legacy", "url": "http://127.0.0.1/"}],
+            "widgets": [{"name": "legacy-widget", "type": "text"}],
+            "settings": {},
+        }
+        with open(self.mf.CONFIG_FILE, "w") as f:
+            json.dump(raw, f)
+        loaded = self.mf.load_config()
+        self.assertIn("id", loaded["iframes"][0])
+        self.assertIn("id", loaded["widgets"][0])
+        # Persisted to disk, so a second load returns the same IDs.
+        iframe_id_first = loaded["iframes"][0]["id"]
+        loaded2 = self.mf.load_config()
+        self.assertEqual(loaded2["iframes"][0]["id"], iframe_id_first)
+
+
+class PermissionFilterTests(_MFTestBase):
+    def setUp(self):
+        self.iframes = [
+            {"id": "aaaaaaaa", "name": "Alpha"},
+            {"id": "bbbbbbbb", "name": "Beta"},
+        ]
+        self.widgets = [
+            {"id": "11111111", "name": "One"},
+            {"id": "22222222", "name": "Two"},
+        ]
+
+    def test_admin_sees_all_even_with_empty_allowlist(self):
+        user_rec = {"is_admin": True, "allowed_iframes": [], "allowed_widgets": []}
+        ifs, wgs = self.mf.filter_by_permissions(self.iframes, self.widgets, user_rec)
+        self.assertEqual(len(ifs), 2)
+        self.assertEqual(len(wgs), 2)
+
+    def test_unset_permissions_sees_all(self):
+        user_rec = {"is_admin": False}
+        ifs, wgs = self.mf.filter_by_permissions(self.iframes, self.widgets, user_rec)
+        self.assertEqual(len(ifs), 2)
+        self.assertEqual(len(wgs), 2)
+
+    def test_empty_list_sees_none(self):
+        user_rec = {"is_admin": False, "allowed_iframes": [], "allowed_widgets": []}
+        ifs, wgs = self.mf.filter_by_permissions(self.iframes, self.widgets, user_rec)
+        self.assertEqual(ifs, [])
+        self.assertEqual(wgs, [])
+
+    def test_partial_whitelist(self):
+        user_rec = {
+            "is_admin": False,
+            "allowed_iframes": ["aaaaaaaa"],
+            "allowed_widgets": ["22222222"],
+        }
+        ifs, wgs = self.mf.filter_by_permissions(self.iframes, self.widgets, user_rec)
+        self.assertEqual([f["name"] for f in ifs], ["Alpha"])
+        self.assertEqual([w["name"] for w in wgs], ["Two"])
+
+    def test_orphan_ids_silently_ignored(self):
+        # A stale permission referencing a deleted iframe should just
+        # not show up — no crash, no other side effects.
+        user_rec = {
+            "is_admin": False,
+            "allowed_iframes": ["gone-id", "aaaaaaaa"],
+            "allowed_widgets": None,
+        }
+        ifs, wgs = self.mf.filter_by_permissions(self.iframes, self.widgets, user_rec)
+        self.assertEqual([f["name"] for f in ifs], ["Alpha"])
+        self.assertEqual(len(wgs), 2)  # None => see all widgets
+
+
 if __name__ == "__main__":
     unittest.main()

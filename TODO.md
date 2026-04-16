@@ -1,6 +1,8 @@
 # TODO - Multi-Frames
 
 Tracking planned optimizations, security hardening, and improvements.
+A deeper review with file:line references and severity grouping lives in
+[REVIEW.md](REVIEW.md).
 
 ---
 
@@ -82,7 +84,7 @@ Tracking planned optimizations, security hardening, and improvements.
 
 - [ ] **Complete modular package** — `multi_frames/templates/` is marked TODO. Finish splitting the single-file source into the modular package for easier development.
 
-- [ ] **Add automated tests** — Currently no tests. Start with unit tests for `hash_password()`, `validate_local_ip()`, `escape_html()`, session management, and config load/save.
+- [x] **Add automated tests** — done in v1.4.8. `tests/` holds a zero-dependency stdlib runner and 39 tests covering `hash_password()`, `validate_local_ip()`, `escape_html()`, rate limiter, session lifecycle, config round-trip, iframe/widget ID backfill, per-user permission filtering, login flow, admin gating, proxy SSRF regression, and Node syntax check of `cloud/worker.js`. Run: `python tests/run_tests.py`.
 
 - [ ] **Reduce render function size** — `render_main_page()` (450+ lines) and `render_admin_page()` (1,000+ lines) are hard to maintain. Break into composable helper functions.
 

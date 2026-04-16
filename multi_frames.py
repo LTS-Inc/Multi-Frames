@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-Frames v1.4.7
+Multi-Frames v1.4.8
 ===================
 A lightweight, dependency-free web server for displaying configurable iFrames
 and dashboard widgets. Uses only Python standard library.
@@ -29,6 +29,14 @@ Default: http://localhost:8080
 Default admin credentials: admin / admin123 (CHANGE THIS!)
 
 Version History:
+    v1.4.8 (2026-04-16)
+        - Per-user iframe and widget visibility: admins can restrict which
+          iframes and widgets each non-admin user sees on the dashboard via
+          a new "Permissions" panel in the admin Users list
+        - Stable 8-char hex IDs backfilled onto every iframe and widget so
+          permissions survive renames and reordering
+        - Unset permissions preserve existing behavior (user sees everything);
+          admins always bypass filtering
     v1.4.7 (2026-03-31)
         - Fixed iframe proxy breaking local iframe display: proxy now only activates
           for remote (non-local) clients where mixed content is actually an issue
@@ -287,8 +295,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.7"
-VERSION_DATE = "2026-03-31"
+VERSION = "1.4.8"
+VERSION_DATE = "2026-04-16"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -10000,7 +10008,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
                 conn.request('GET', request_path, headers={
                     'Host': parsed_target.netloc,
-                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.7 Proxy)',
+                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.8 Proxy)',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Encoding': 'identity'
                 })
@@ -10027,7 +10035,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         request_path = redirect_url
                     conn.request('GET', request_path, headers={
                         'Host': f'{conn_host}:{conn_port}',
-                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.7 Proxy)',
+                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.8 Proxy)',
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                         'Accept-Encoding': 'identity'
                     })
@@ -12083,7 +12091,7 @@ def print_shutdown(use_color=True):
 def main():
     global SERVER_PORT, SERVER_START_TIME, uptime_tracker
 
-    parser = argparse.ArgumentParser(description='Multi-Frames v1.1.11 - Dashboard & iFrame Display Server by LTS, Inc.')
+    parser = argparse.ArgumentParser(description=f'Multi-Frames v{VERSION} - Dashboard & iFrame Display Server by LTS, Inc.')
     parser.add_argument('--port', type=int, default=8080, help='Port to listen on (default: 8080)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--no-color', action='store_true', help='Disable colored output')

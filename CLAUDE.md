@@ -7,7 +7,7 @@ This document provides context for AI assistants working on the Multi-Frames cod
 **Multi-Frames** is a zero-dependency Python web server for displaying configurable iFrames and dashboard widgets. Designed for home dashboards, kiosks, digital signage, and Raspberry Pi deployments.
 
 - **Author**: Marco Longoria, LTS, Inc.
-- **Version**: 1.4.7
+- **Version**: 1.4.8
 - **License**: MIT
 - **Python**: 3.6+
 
@@ -84,6 +84,17 @@ user = self.get_current_user()
 if not user:
     self.redirect('/login')
     return
+
+# Stable IDs on new iframes / widgets
+import secrets
+new_iframe = {"id": secrets.token_hex(4), "name": name, ...}
+
+# Per-user visibility filter (applied in render_main_page)
+iframes, widgets = filter_by_permissions(
+    config.get("iframes", []),
+    config.get("widgets", []),
+    config.get("users", {}).get(user, {}),
+)
 ```
 
 ### Building
@@ -112,17 +123,27 @@ python -m multi_frames --port 8080
 - Drag-and-drop reordering
 - Connectivity testing (server-side ping)
 - Fallback content for failed loads
+- Stable 8-char hex `id` on every iframe (backfilled on upgrade) — permissions and future references should use `id`, not list index
 
 ### 2. Dashboard Widgets
 - Clock, weather, buttons, text, images
 - Command buttons (TCP/UDP/Telnet)
 - Raspberry Pi monitoring card
+- Stable 8-char hex `id` on every widget (backfilled on upgrade)
 
-### 3. User Authentication
+### 3. User Authentication & Permissions
 - Session-based with secure tokens
 - Admin vs regular users
-- Password hashing (SHA-256 + salt)
+- Password hashing — currently bare SHA-256 (no salt); PBKDF2 migration is tracked in `TODO.md`
 - Rate limiting on login
+- **Per-user allow-lists**: each user record may carry optional
+  `allowed_iframes` / `allowed_widgets` fields (lists of stable IDs).
+  `None` or missing = see all (backward compat); `[]` = see none; list
+  of IDs = whitelist. Admins always bypass filtering. See
+  `filter_by_permissions()` applied in `render_main_page()`.
+- Admin UI: each non-admin user row in Admin → Users has a **Permissions**
+  button opening checkbox groups for iframes and widgets, plus a
+  **Reset (see all)** action. Posts to `/admin/user/permissions`.
 
 ### 4. Cloud Sync (Optional)
 - Cloudflare Worker backend
@@ -162,14 +183,36 @@ python -m multi_frames --port 8080
 ### Admin Only
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/admin/iframe/*` | POST | Manage iFrames |
-| `/admin/widget/*` | POST | Manage widgets |
-| `/admin/user/*` | POST | Manage users |
+| `/admin/iframe/*` | POST | Manage iFrames (add, edit, delete, move) |
+| `/admin/widget/*` | POST | Manage widgets (add, edit, delete, move) |
+| `/admin/user/add` | POST | Create a user |
+| `/admin/user/delete` | POST | Delete a user |
+| `/admin/user/change-password` | POST | Change a user's password |
+| `/admin/user/permissions` | POST | Set `allowed_iframes` / `allowed_widgets` for a user (or reset to see-all) |
 | `/admin/settings/*` | POST | System settings |
 
 ## Testing
 
-Currently no automated tests. Manual testing workflow:
+Automated tests live in `tests/` and use only the Python standard
+library (zero dependencies, same constraint as the project).
+
+```bash
+python tests/run_tests.py              # full suite
+python tests/run_tests.py -v           # verbose
+python tests/run_tests.py -k perms     # filter
+```
+
+- `tests/test_unit.py` — password hashing, URL validation, HTML
+  escaping, rate limiter, session lifecycle, config round-trip,
+  `_ensure_ids` backfill, `filter_by_permissions` behavior.
+- `tests/test_server.py` — boots the real server on an ephemeral
+  port; exercises login, admin gating, proxy SSRF regression,
+  and per-user permission filtering.
+- `tests/test_worker.py` — `node --check` on `cloud/worker.js` and
+  client/worker route parity.
+- Manual release checklist: `tests/README.md`.
+
+### Manual smoke test
 
 1. Start server: `python multi_frames.py`
 2. Open browser: `http://localhost:8080`
@@ -194,6 +237,19 @@ Currently no automated tests. Manual testing workflow:
 2. Add POST handler for saving (~line 9800)
 3. Update `save_config()` call
 4. Add to default config if needed
+
+### Working with iframe/widget permissions
+
+- Each iframe and widget has a stable `id` (8-char hex). When adding new
+  ones in handlers, inject `"id": secrets.token_hex(4)`. When editing an
+  existing one (full-replace pattern), preserve `existing.get("id")` or
+  fall back to a new token.
+- Per-user allow-lists live on the user record as `allowed_iframes` and
+  `allowed_widgets`. `None` means "see all". Never store list indices —
+  always store stable IDs.
+- If you add a new content surface (e.g. "sections"), mirror the same
+  id-backfill + filter pattern: extend `_ensure_ids()` and extend
+  `filter_by_permissions()` with a matching `allowed_sections` field.
 
 ### Help Page
 
@@ -231,4 +287,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.4.7** (2026-03-31)
+Current: **v1.4.8** (2026-04-16)

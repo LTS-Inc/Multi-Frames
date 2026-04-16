@@ -5,6 +5,27 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.8] - 2026-04-16
+
+### Added
+- **Per-user iframe/widget visibility**: admins can now restrict which iframes and widgets each non-admin user sees on their dashboard. A new **Permissions** button appears on every non-admin row in the admin Users list; it opens a panel with checkbox groups for iframes and widgets, plus a **Reset (see all)** action.
+- **Stable IDs on iframes and widgets**: every iframe and widget now carries an 8-char hex `id` so permissions survive renames and list reordering. `load_config()` backfills IDs on upgrade and persists them exactly once.
+- `filter_by_permissions(iframes, widgets, user_record)` helper applied in `render_main_page()`.
+- `POST /admin/user/permissions` endpoint to save or reset an individual user's allow-lists. Unknown IDs are silently dropped (self-heals against deleted iframes/widgets).
+- Multi-value form field exposure via `_multi` in `read_post_data()` (enables checkbox groups without changing single-value callers).
+- Test suite under `tests/` (zero-dependency stdlib runner): `run_tests.py`, `test_unit.py`, `test_server.py`, `test_worker.py`. 39 tests cover password hashing, URL validation, HTML escaping, rate limiter, session lifecycle, config round-trip, ID backfill, permission filtering, login flow, admin gating, proxy rejection of external URLs, proxy SSRF regression, and Node syntax check of `cloud/worker.js`.
+- `REVIEW.md` — full codebase review report (bugs, conflicts, risks) grouped by severity with file:line references and suggested fixes.
+
+### Changed
+- `render_main_page()` filters iframes and widgets per user. `is_admin=True` users always see everything, regardless of their own permission list.
+- iframe add/edit handlers (`/admin/iframe/add`, `/admin/iframe/edit`) inject a new `id` on add and preserve the existing `id` on edit.
+- Widget add/edit handlers (`/admin/widget/add`, `/admin/widget/edit`) inject a new `id` on add and preserve the existing `id` on edit.
+- `load_config()` now runs a one-shot `_ensure_ids` migration on read and rewrites the config file when any IDs are backfilled.
+
+### Backward compatibility
+- User records without `allowed_iframes` / `allowed_widgets` continue to see every iframe and widget — no upgrade surprises.
+- Pre-upgrade configs lacking iframe/widget IDs are migrated transparently on first load.
+
 ## [1.4.7] - 2026-03-31
 
 ### Fixed

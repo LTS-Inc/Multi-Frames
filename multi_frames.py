@@ -6011,10 +6011,13 @@ def render_main_page(user, config, client_ip=None):
             header_text = escape_html(iframe.get("header_text", ""))  # Custom header text, empty = use name
             border_style = iframe.get("border_style", "default")  # default, none, thin, thick, rounded
             border_color = iframe.get("border_color", "")
+            header_font_size = iframe.get("header_font_size", 0)  # px, 0 = use theme default
+            header_font_family = iframe.get("header_font_family", "default")  # default, system, serif, monospace
+            header_font_weight = iframe.get("header_font_weight", "")  # "", 400, 500, 600, 700
             zoom = iframe.get("zoom", 100)  # percentage, 100 = normal
             use_embed_code = iframe.get("use_embed_code", False)
             embed_code = iframe.get("embed_code", "")
-            
+
             # Display title - use header_text if set, otherwise use name
             display_title = header_text if header_text else name
             
@@ -6065,7 +6068,24 @@ def render_main_page(user, config, client_ip=None):
             
             # Header visibility
             if show_header:
-                header_html = f'<h3><span class="title-left">{display_title}</span> {url_display}</h3>'
+                header_style_parts = []
+                try:
+                    hfs = int(header_font_size)
+                except (TypeError, ValueError):
+                    hfs = 0
+                if 8 <= hfs <= 48:
+                    header_style_parts.append(f"font-size:{hfs}px")
+                header_font_family_map = {
+                    "system": "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+                    "serif": "Georgia, 'Times New Roman', serif",
+                    "monospace": "'SF Mono', 'Consolas', 'Monaco', 'Courier New', monospace",
+                }
+                if header_font_family in header_font_family_map:
+                    header_style_parts.append(f"font-family:{header_font_family_map[header_font_family]}")
+                if header_font_weight in ("400", "500", "600", "700"):
+                    header_style_parts.append(f"font-weight:{header_font_weight}")
+                header_style_attr = f' style="{";".join(header_style_parts)}"' if header_style_parts else ''
+                header_html = f'<h3{header_style_attr}><span class="title-left">{display_title}</span> {url_display}</h3>'
             else:
                 header_html = ''
                 if 'border-radius' not in card_style_str:
@@ -6383,6 +6403,9 @@ def render_admin_page(user, config, message=None, error=None):
         header_text = escape_html(iframe.get("header_text", ""))
         border_style = iframe.get("border_style", "default")
         border_color = escape_html(iframe.get("border_color", ""))
+        header_font_size = iframe.get("header_font_size", 0)
+        header_font_family = iframe.get("header_font_family", "default")
+        header_font_weight = iframe.get("header_font_weight", "")
         allow_external = iframe.get("allow_external", False)
         use_embed_code = iframe.get("use_embed_code", False)
         embed_code = escape_html(iframe.get("embed_code", ""))
@@ -6528,6 +6551,32 @@ def render_admin_page(user, config, message=None, error=None):
                                 <input type="text" name="border_color" value="{border_color}" placeholder="#3b82f6 or empty for default">
                             </div>
                         </div>
+                        <div class="inline-form" style="margin-top:0.75rem;">
+                            <div class="form-group">
+                                <label>Header Font Size (px)</label>
+                                <input type="number" name="header_font_size" value="{header_font_size or ''}" min="8" max="48" placeholder="default">
+                            </div>
+                            <div class="form-group">
+                                <label>Header Font Family</label>
+                                <select name="header_font_family">
+                                    <option value="default" {"selected" if header_font_family == "default" else ""}>Default (theme)</option>
+                                    <option value="system" {"selected" if header_font_family == "system" else ""}>Sans-serif</option>
+                                    <option value="serif" {"selected" if header_font_family == "serif" else ""}>Serif</option>
+                                    <option value="monospace" {"selected" if header_font_family == "monospace" else ""}>Monospace</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Header Font Weight</label>
+                                <select name="header_font_weight">
+                                    <option value="" {"selected" if not header_font_weight else ""}>Default</option>
+                                    <option value="400" {"selected" if header_font_weight == "400" else ""}>Normal (400)</option>
+                                    <option value="500" {"selected" if header_font_weight == "500" else ""}>Medium (500)</option>
+                                    <option value="600" {"selected" if header_font_weight == "600" else ""}>Semibold (600)</option>
+                                    <option value="700" {"selected" if header_font_weight == "700" else ""}>Bold (700)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <small style="color:var(--text-secondary);display:block;margin-top:0.5rem;">Header font size: 8-48px (blank = theme default). Affects only this iFrame's header bar.</small>
                     </div>
                     
                     <div class="edit-section">
@@ -6917,6 +6966,11 @@ def render_admin_page(user, config, message=None, error=None):
                             <div class="inline-form" style="margin-bottom:1rem;">
                                 <div class="form-group"><label>Border Style</label><select name="border_style"><option value="default">Default</option><option value="none">None</option><option value="thin">Thin</option><option value="thick">Thick</option><option value="rounded">Rounded</option></select></div>
                                 <div class="form-group"><label>Border Color</label><input type="text" name="border_color" placeholder="#3b82f6 or empty"></div>
+                            </div>
+                            <div class="inline-form" style="margin-bottom:1rem;">
+                                <div class="form-group"><label>Header Font Size (px)</label><input type="number" name="header_font_size" min="8" max="48" placeholder="default"></div>
+                                <div class="form-group"><label>Header Font Family</label><select name="header_font_family"><option value="default" selected>Default (theme)</option><option value="system">Sans-serif</option><option value="serif">Serif</option><option value="monospace">Monospace</option></select></div>
+                                <div class="form-group"><label>Header Font Weight</label><select name="header_font_weight"><option value="" selected>Default</option><option value="400">Normal</option><option value="500">Medium</option><option value="600">Semibold</option><option value="700">Bold</option></select></div>
                             </div>
                             <div class="toggle-row" style="padding:0.75rem;background:var(--bg-secondary);border-radius:var(--radius);margin-bottom:0.8rem;">
                                 <div>
@@ -10321,10 +10375,22 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             header_text = data.get('header_text', '').strip()
             border_style = data.get('border_style', 'default')
             border_color = data.get('border_color', '').strip()
+            try:
+                header_font_size = int(data.get('header_font_size') or 0)
+            except ValueError:
+                header_font_size = 0
+            if header_font_size and not (8 <= header_font_size <= 48):
+                header_font_size = 0
+            header_font_family = data.get('header_font_family', 'default')
+            if header_font_family not in ('default', 'system', 'serif', 'monospace'):
+                header_font_family = 'default'
+            header_font_weight = data.get('header_font_weight', '').strip()
+            if header_font_weight not in ('400', '500', '600', '700'):
+                header_font_weight = ''
             allow_external = data.get('allow_external', '0') == '1'
             use_embed_code = data.get('use_embed_code', '0') == '1'
             embed_code = data.get('embed_code', '').strip()
-            
+
             # Validate border_style
             if border_style not in ('default', 'none', 'thin', 'thick', 'rounded'):
                 border_style = 'default'
@@ -10350,6 +10416,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         "header_text": header_text[:100],
                         "border_style": border_style,
                         "border_color": border_color[:20],
+                        "header_font_size": header_font_size,
+                        "header_font_family": header_font_family,
+                        "header_font_weight": header_font_weight,
                         "allow_external": True,
                         "use_embed_code": True,
                         "embed_code": embed_code[:10000]  # Limit embed code length
@@ -10375,6 +10444,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         "header_text": header_text[:100],
                         "border_style": border_style,
                         "border_color": border_color[:20],
+                        "header_font_size": header_font_size,
+                        "header_font_family": header_font_family,
+                        "header_font_weight": header_font_weight,
                         "allow_external": allow_external,
                         "use_embed_code": False,
                         "embed_code": ""
@@ -10411,10 +10483,22 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 header_text = data.get('header_text', '').strip()
                 border_style = data.get('border_style', 'default')
                 border_color = data.get('border_color', '').strip()
+                try:
+                    header_font_size = int(data.get('header_font_size') or 0)
+                except ValueError:
+                    header_font_size = 0
+                if header_font_size and not (8 <= header_font_size <= 48):
+                    header_font_size = 0
+                header_font_family = data.get('header_font_family', 'default')
+                if header_font_family not in ('default', 'system', 'serif', 'monospace'):
+                    header_font_family = 'default'
+                header_font_weight = data.get('header_font_weight', '').strip()
+                if header_font_weight not in ('400', '500', '600', '700'):
+                    header_font_weight = ''
                 allow_external = data.get('allow_external') == '1'
                 use_embed_code = data.get('use_embed_code') == '1'
                 embed_code = data.get('embed_code', '').strip()
-                
+
                 # Validate border_style
                 if border_style not in ('default', 'none', 'thin', 'thick', 'rounded'):
                     border_style = 'default'
@@ -10448,6 +10532,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         "header_text": header_text[:100],
                         "border_style": border_style,
                         "border_color": border_color[:20],
+                        "header_font_size": header_font_size,
+                        "header_font_family": header_font_family,
+                        "header_font_weight": header_font_weight,
                         "allow_external": allow_external or use_embed_code,
                         "use_embed_code": use_embed_code,
                         "embed_code": embed_code[:10000] if use_embed_code else ""

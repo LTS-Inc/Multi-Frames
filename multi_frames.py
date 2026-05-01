@@ -3600,7 +3600,7 @@ button:hover, .btn:hover {
     gap: 0.5rem;
 }
 
-.iframe-card h3 span {
+.iframe-card h3 .iframe-url {
     color: var(--text-secondary);
     font-weight: 400;
     font-size: 0.75rem;
@@ -4303,7 +4303,7 @@ footer a:hover {
         font-size: 0.75rem;
     }
 
-    .iframe-card h3 span {
+    .iframe-card h3 .iframe-url {
         font-size: 0.65rem;
     }
 
@@ -6023,9 +6023,9 @@ def render_main_page(user, config, client_ip=None):
             
             # URL display - show "Embed" for embed code iframes
             if use_embed_code:
-                url_display = '<span style="opacity:0.6;">📋 Embed Code</span>' if show_url else ''
+                url_display = '<span class="iframe-url" style="opacity:0.6;">📋 Embed Code</span>' if show_url else ''
             else:
-                url_display = f'<span>{url}</span>' if show_url else ''
+                url_display = f'<span class="iframe-url">{url}</span>' if show_url else ''
             
             # Build border styles
             card_styles = []

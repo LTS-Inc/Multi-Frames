@@ -1375,6 +1375,10 @@ class CloudAgent:
             if self._tunnel_session_id:
                 headers['Cookie'] = f'session={self._tunnel_session_id}'
 
+            # Mark request as forwarded through the cloud tunnel so the local
+            # handler can treat it as a remote client (e.g. enable iframe proxy)
+            headers['X-Tunnel-Forwarded'] = '1'
+
             # Set Content-Length for POST bodies
             body_bytes = body.encode('utf-8') if body else None
             if body_bytes:
@@ -5893,7 +5897,7 @@ def filter_by_permissions(iframes, widgets, user_record):
     return iframes, widgets
 
 
-def render_main_page(user, config, client_ip=None):
+def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
     """Render the main iFrame display page."""
     user_record = config.get("users", {}).get(user, {}) if user else {}
     iframes, widgets = filter_by_permissions(
@@ -5990,8 +5994,8 @@ def render_main_page(user, config, client_ip=None):
     else:
         # Only proxy iframes when client is accessing remotely (mixed content fix)
         # Local clients can load local iframe URLs directly without issues
-        iframe_proxy_enabled = config["settings"].get("iframe_proxy", False)
-        if iframe_proxy_enabled and client_ip:
+        iframe_proxy_enabled = force_iframe_proxy or config["settings"].get("iframe_proxy", False)
+        if iframe_proxy_enabled and client_ip and not force_iframe_proxy:
             try:
                 client_addr = ipaddress.ip_address(client_ip)
                 if client_addr.is_private or client_addr.is_loopback:
@@ -9901,7 +9905,16 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
         if path == '/':
             if user:
-                self.send_html(render_main_page(user, config, client_ip=self.client_address[0]))
+                # Requests forwarded through the cloud tunnel arrive on
+                # 127.0.0.1, which would normally disable the iframe proxy.
+                # Force-enable it so remote browsers get /proxy/N URLs they
+                # can actually reach (instead of unreachable LAN IPs).
+                tunneled = self.headers.get('X-Tunnel-Forwarded') == '1'
+                self.send_html(render_main_page(
+                    user, config,
+                    client_ip=None if tunneled else self.client_address[0],
+                    force_iframe_proxy=tunneled,
+                ))
             else:
                 self.redirect('/login')
         
@@ -10011,7 +10024,10 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({'error': 'Authentication required'}, 401)
                 return
 
-            if not config["settings"].get("iframe_proxy", False):
+            # Tunneled requests always need the proxy regardless of the
+            # user-facing setting — the remote browser can't reach LAN IPs.
+            tunneled = self.headers.get('X-Tunnel-Forwarded') == '1'
+            if not tunneled and not config["settings"].get("iframe_proxy", False):
                 self.send_html(render_page("Proxy Disabled", '<div class="card"><h2>Proxy Disabled</h2><p>iFrame proxy is not enabled in settings.</p></div>', user, config), 403)
                 return
 

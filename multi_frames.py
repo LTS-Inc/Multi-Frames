@@ -6136,7 +6136,10 @@ def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
                     hash_frag = ''
                     if '#' in raw_url:
                         hash_frag = '#' + raw_url.split('#', 1)[1]
-                    iframe_url = f'/proxy/{i}{hash_frag}'
+                    # Relative path (no leading slash) so it resolves correctly
+                    # both for direct access (page at /) and through the cloud
+                    # tunnel (page at /api/tunnel/proxy/<tid>/).
+                    iframe_url = f'proxy/{i}{hash_frag}'
                 if wrapper_style_str:
                     iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe></div>'
                 else:

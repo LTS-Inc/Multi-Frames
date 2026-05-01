@@ -1382,9 +1382,24 @@ export default {
       if (path.match(/^\/api\/tunnel\/proxy\/[\w]+/) && (method === 'GET' || method === 'POST')) {
         const parts = path.split('/');
         const tunnelId = parts[4];
-        const token = url.searchParams.get('token');
+        const queryToken = url.searchParams.get('token');
 
-        // Verify admin auth
+        // Auth: accept token from query param (initial navigation) OR from
+        // cookie (subresource loads like iframes/images that can't carry
+        // a query string). The cookie is set on first verified request.
+        const cookieHeader = request.headers.get('Cookie') || '';
+        const cookieName = 'tunnel_token_' + tunnelId;
+        let cookieToken = null;
+        for (const part of cookieHeader.split(';')) {
+          const eq = part.indexOf('=');
+          if (eq < 0) continue;
+          const name = part.slice(0, eq).trim();
+          if (name === cookieName) {
+            cookieToken = decodeURIComponent(part.slice(eq + 1).trim());
+            break;
+          }
+        }
+        const token = queryToken || cookieToken;
         if (!token) return errorResponse('Unauthorized', 401);
         const user = await verifyToken(token, env);
         if (!user) return errorResponse('Unauthorized', 401);
@@ -1403,6 +1418,14 @@ export default {
           body: method === 'POST' ? request.body : undefined
         }));
 
+        // Set/refresh the auth cookie so subsequent subresource requests
+        // (iframes, images, scripts loaded by HTML) authenticate without
+        // needing the token in their URL. Scoped to this tunnel's path.
+        const setCookie = cookieName + '=' + encodeURIComponent(token) +
+          '; Path=/api/tunnel/proxy/' + tunnelId + '/' +
+          '; HttpOnly; SameSite=Lax; Max-Age=3600' +
+          (url.protocol === 'https:' ? '; Secure' : '');
+
         // Inject URL-rewriting script into HTML responses so that
         // in-page links (href="/admin") route back through the tunnel proxy
         const ct = doResponse.headers.get('Content-Type') || '';
@@ -1413,10 +1436,13 @@ export default {
           const tunnelNav = `<script>(function(){var P='${proxyBase}',T='${escapedToken}';function R(u){if(typeof u==='string'&&u.charAt(0)==='/'&&u.charAt(1)!=='/'){var p=u.substring(1);var s=p.indexOf('?')>-1?'&':'?';return P+p+s+'token='+encodeURIComponent(T)}return u}document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(a){var h=a.getAttribute('href');var n=R(h);if(n!==h){e.preventDefault();window.location.href=n}}},true);document.addEventListener('submit',function(e){var f=e.target;var a=f.getAttribute('action');if(a){var n=R(a);if(n!==a)f.action=n}},true);var oF=window.fetch;window.fetch=function(u,o){if(typeof u==='string')u=R(u);return oF.call(this,u,o)};var oX=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){arguments[1]=R(u);return oX.apply(this,arguments)}})()</script>`;
           html = html.replace(/<\/head>/i, tunnelNav + '</head>');
           const newHeaders = new Headers(doResponse.headers);
+          newHeaders.append('Set-Cookie', setCookie);
           return new Response(html, { status: doResponse.status, headers: newHeaders });
         }
 
-        return doResponse;
+        const newHeaders = new Headers(doResponse.headers);
+        newHeaders.append('Set-Cookie', setCookie);
+        return new Response(doResponse.body, { status: doResponse.status, headers: newHeaders });
       }
 
       // ============== BRANDING ASSET ROUTES ==============

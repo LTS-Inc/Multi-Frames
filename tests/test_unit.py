@@ -241,5 +241,70 @@ class PermissionFilterTests(_MFTestBase):
         self.assertEqual(len(wgs), 2)  # None => see all widgets
 
 
+class _FakeHeaders(dict):
+    """Minimal headers shim that supports the .get(name, default) interface
+    used by detect_device_profile()."""
+    def get(self, key, default=""):
+        return super().get(key, default)
+
+
+class DeviceProfileTests(_MFTestBase):
+    IPHONE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) "
+                 "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 "
+                 "Mobile/15E148 Safari/604.1")
+    IPAD_UA = ("Mozilla/5.0 (iPad; CPU OS 17_2 like Mac OS X) AppleWebKit/605.1.15 "
+               "(KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1")
+    ANDROID_PHONE_UA = ("Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+    ANDROID_TABLET_UA = ("Mozilla/5.0 (Linux; Android 14; SM-X910) AppleWebKit/537.36 "
+                         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    DESKTOP_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+    def test_iphone_detected_as_phone(self):
+        h = _FakeHeaders({"User-Agent": self.IPHONE_UA})
+        self.assertEqual(self.mf.detect_device_profile(h), "phone")
+
+    def test_ipad_detected_as_tablet(self):
+        h = _FakeHeaders({"User-Agent": self.IPAD_UA})
+        self.assertEqual(self.mf.detect_device_profile(h), "tablet")
+
+    def test_android_phone_detected(self):
+        h = _FakeHeaders({"User-Agent": self.ANDROID_PHONE_UA})
+        self.assertEqual(self.mf.detect_device_profile(h), "phone")
+
+    def test_android_tablet_detected(self):
+        h = _FakeHeaders({"User-Agent": self.ANDROID_TABLET_UA})
+        self.assertEqual(self.mf.detect_device_profile(h), "tablet")
+
+    def test_desktop_default(self):
+        h = _FakeHeaders({"User-Agent": self.DESKTOP_UA})
+        self.assertEqual(self.mf.detect_device_profile(h), "desktop")
+
+    def test_kiosk_via_query_string(self):
+        h = _FakeHeaders({"User-Agent": self.DESKTOP_UA})
+        self.assertEqual(self.mf.detect_device_profile(h, "/?kiosk=1"), "kiosk")
+
+    def test_cookie_override_wins(self):
+        h = _FakeHeaders({"User-Agent": self.IPHONE_UA, "Cookie": "mf_device=tablet"})
+        self.assertEqual(self.mf.detect_device_profile(h), "tablet")
+
+    def test_invalid_cookie_falls_through(self):
+        h = _FakeHeaders({"User-Agent": self.IPHONE_UA,
+                          "Cookie": "mf_device=hovercraft"})
+        self.assertEqual(self.mf.detect_device_profile(h), "phone")
+
+    def test_client_hint_mobile_marks_phone(self):
+        h = _FakeHeaders({"User-Agent": self.DESKTOP_UA, "Sec-CH-UA-Mobile": "?1"})
+        self.assertEqual(self.mf.detect_device_profile(h), "phone")
+
+    def test_empty_headers_default_to_desktop(self):
+        self.assertEqual(self.mf.detect_device_profile(None), "desktop")
+
+    def test_missing_user_agent_returns_desktop(self):
+        h = _FakeHeaders({})
+        self.assertEqual(self.mf.detect_device_profile(h), "desktop")
+
+
 if __name__ == "__main__":
     unittest.main()

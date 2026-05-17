@@ -295,8 +295,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.8"
-VERSION_DATE = "2026-04-16"
+VERSION = "1.5.0"
+VERSION_DATE = "2026-05-17"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -3290,6 +3290,108 @@ def escape_html(text):
         return ""
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
+# =============================================================================
+# Device Profile Detection (mobile UI adaptive layer)
+# =============================================================================
+
+import threading as _threading
+_request_ctx = _threading.local()
+
+
+def _set_request_context(headers, path):
+    """Stash per-request headers/path so render helpers can read them without
+    threading the request handler through every render call site."""
+    _request_ctx.headers = headers
+    _request_ctx.path = path
+
+
+def _get_request_context():
+    return (
+        getattr(_request_ctx, "headers", None),
+        getattr(_request_ctx, "path", ""),
+    )
+
+
+_VALID_DEVICE_PROFILES = ("phone", "tablet", "kiosk", "desktop")
+
+
+def detect_device_profile(headers, path="", config=None):
+    """Classify the requesting device into one of: phone, tablet, kiosk, desktop.
+
+    Priority order:
+      1. ?kiosk=1 query string → kiosk
+      2. mf_device cookie override (set by client capability probe)
+      3. Sec-CH-UA-Mobile client hint → phone
+      4. User-Agent string parsing
+      5. Default: desktop
+    """
+    # Query string kiosk override (e.g. /?kiosk=1)
+    if "kiosk=1" in (path or ""):
+        return "kiosk"
+
+    # Client-set cookie override (capability probe result)
+    cookie_header = ""
+    try:
+        cookie_header = headers.get("Cookie", "") if headers else ""
+    except Exception:
+        cookie_header = ""
+    if cookie_header:
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith("mf_device="):
+                val = part.split("=", 1)[1].strip()
+                if val in _VALID_DEVICE_PROFILES:
+                    return val
+
+    # Optional kiosk_hosts list in config (hostname-based pinning)
+    if config is not None:
+        try:
+            host = (headers.get("Host", "") or "").split(":")[0].lower() if headers else ""
+            kiosk_hosts = [h.lower() for h in config.get("settings", {}).get("kiosk_hosts", [])]
+            if host and host in kiosk_hosts:
+                return "kiosk"
+        except Exception:
+            pass
+
+    # Client hints (modern Chrome / Edge)
+    try:
+        ch_mobile = headers.get("Sec-CH-UA-Mobile", "") if headers else ""
+        if ch_mobile.strip() == "?1":
+            return "phone"
+    except Exception:
+        pass
+
+    # User-Agent parsing fallback
+    ua = ""
+    try:
+        ua = headers.get("User-Agent", "") if headers else ""
+    except Exception:
+        ua = ""
+
+    if not ua:
+        return "desktop"
+
+    ua_lower = ua.lower()
+
+    # iPad first (Safari 13+ reports as Mac, but iPad still says iPad in some)
+    if "ipad" in ua_lower or "tablet" in ua_lower:
+        return "tablet"
+    # Android tablet: Android without "Mobile" token
+    if "android" in ua_lower and "mobile" not in ua_lower:
+        return "tablet"
+    # Phones
+    if "iphone" in ua_lower or "ipod" in ua_lower:
+        return "phone"
+    if "android" in ua_lower and "mobile" in ua_lower:
+        return "phone"
+    if "mobile" in ua_lower and ("webkit" in ua_lower or "firefox" in ua_lower):
+        return "phone"
+    # Raspberry Pi browser running locally is typically the kiosk
+    if "raspbian" in ua_lower or "raspberry" in ua_lower:
+        return "kiosk"
+
+    return "desktop"
+
 def parse_multipart(content_type, body):
     """Parse multipart/form-data for file uploads."""
     result = {'fields': {}, 'files': {}}
@@ -4361,7 +4463,335 @@ footer a:hover {
         --bg-secondary: #0a0a0a;
     }
 }
+
+/* ===================================================================
+   Mobile UI v1.5 — adaptive device profile + interaction upgrades
+   Selectors key off html[data-device="..."] set by capability probe.
+   =================================================================== */
+
+/* Modern viewport units: avoid mobile Safari URL-bar jump on dashboard */
+@supports (height: 100dvh) {
+    html[data-device="phone"] .iframe-grid > .iframe-card iframe,
+    html[data-device="phone"] .iframe-wrapper iframe {
+        max-height: 70dvh;
+    }
+    html[data-device="phone"][data-orient="land"] .iframe-grid > .iframe-card iframe,
+    html[data-device="phone"][data-orient="land"] .iframe-wrapper iframe {
+        max-height: 85dvh;
+    }
+}
+
+/* Hamburger nav drawer on phone — uses <details> for zero-JS disclosure */
+html[data-device="phone"] header nav details.mf-nav {
+    position: relative;
+}
+html[data-device="phone"] header nav details.mf-nav > summary {
+    list-style: none;
+    cursor: pointer;
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+html[data-device="phone"] header nav details.mf-nav > summary::-webkit-details-marker { display: none; }
+html[data-device="phone"] header nav details.mf-nav[open] > summary { color: var(--accent); }
+html[data-device="phone"] header nav details.mf-nav .mf-nav-items {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    background: var(--card, var(--bg-secondary));
+    border: 1px solid var(--border);
+    border-radius: var(--radius, 0.5rem);
+    padding: 0.5rem;
+    min-width: 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    z-index: 1001;
+}
+html[data-device="phone"] header nav details.mf-nav .mf-nav-items a {
+    padding: 0.75rem 1rem;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    border-radius: 0.375rem;
+}
+html[data-device="phone"] header nav details.mf-nav .mf-nav-items a:hover {
+    background: var(--bg-primary);
+    text-decoration: none;
+}
+/* Desktop / tablet / kiosk: hide hamburger, show flat link list */
+html:not([data-device="phone"]) header nav details.mf-nav > summary { display: none; }
+html:not([data-device="phone"]) header nav details.mf-nav .mf-nav-items {
+    position: static;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    box-shadow: none;
+    flex-direction: row;
+    gap: 1rem;
+    min-width: 0;
+}
+html:not([data-device="phone"]) header nav details.mf-nav .mf-nav-items a {
+    padding: 0;
+    min-height: 0;
+}
+/* Treat <details> as always-open on non-phone */
+html:not([data-device="phone"]) header nav details.mf-nav .mf-nav-items {
+    display: flex !important;
+}
+
+/* Bottom tab bar for admin on phone */
+html[data-device="phone"] .admin-tabs {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
+    padding: 0.25rem;
+    padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+    display: flex;
+    justify-content: space-around;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    z-index: 999;
+    box-shadow: 0 -2px 8px rgba(0,0,0,0.15);
+    margin: 0;
+}
+html[data-device="phone"] .admin-tabs::after { display: none; }
+html[data-device="phone"] .admin-tab {
+    flex: 1 0 auto;
+    min-width: 56px;
+    min-height: 52px;
+    padding: 0.5rem 0.4rem;
+    border-radius: 0.5rem;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-size: 0.65rem;
+}
+html[data-device="phone"] .admin-tab-icon { font-size: 1.25rem; }
+html[data-device="phone"] .admin-tab-text {
+    display: block !important;
+    font-size: 0.6rem;
+    line-height: 1;
+}
+html[data-device="phone"] body { padding-bottom: 72px; }
+html[data-device="phone"] body { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+
+/* Skeleton shimmer for iframes while loading */
+.iframe-wrapper { position: relative; }
+.iframe-wrapper::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg,
+        var(--bg-secondary) 0%,
+        var(--border) 50%,
+        var(--bg-secondary) 100%);
+    background-size: 200% 100%;
+    animation: mf-shimmer 1.4s ease-in-out infinite;
+    z-index: 1;
+    pointer-events: none;
+    border-radius: inherit;
+}
+.iframe-wrapper.loaded::before { display: none; }
+.iframe-wrapper iframe { position: relative; z-index: 2; }
+@keyframes mf-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .iframe-wrapper::before { animation: none; opacity: 0.6; }
+}
+
+/* Toast notification for save success on phones */
+html[data-device="phone"] .message.success {
+    position: fixed;
+    bottom: 84px;
+    left: 1rem;
+    right: 1rem;
+    z-index: 1100;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    margin: 0;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+/* Sticky save bar for long edit forms */
+.form-actions.sticky-bottom {
+    position: sticky;
+    bottom: 0;
+    background: var(--card, var(--bg-secondary));
+    padding: 0.75rem 0;
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    margin-top: 1rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    z-index: 5;
+}
+html[data-device="phone"] .form-actions.sticky-bottom .btn {
+    flex: 1 1 auto;
+}
+
+/* Two-step destructive confirm visual state */
+.confirm-pending {
+    background: #ef4444 !important;
+    color: #fff !important;
+    animation: mf-pulse 0.6s ease-in-out infinite alternate;
+}
+@keyframes mf-pulse {
+    from { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
+    to   { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .confirm-pending { animation: none; }
+}
+
+/* Card press feedback on touch devices */
+@media (hover: none) and (pointer: coarse) {
+    .card:active,
+    .iframe-card:active {
+        transform: scale(0.99);
+        transition: transform 120ms;
+    }
+}
+
+/* content-visibility perf: skip layout/paint of offscreen admin panels */
+.admin-tab-panel:not(.active) {
+    content-visibility: auto;
+    contain-intrinsic-size: 1px 600px;
+}
+
+/* Bottom-sheet <dialog> for edit forms (Sprint 3 styling) */
+dialog.mf-sheet {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    max-width: min(640px, 100%);
+    width: 100%;
+}
+dialog.mf-sheet::backdrop {
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(2px);
+}
+dialog.mf-sheet .mf-sheet-inner {
+    background: var(--card, var(--bg-secondary));
+    color: var(--text-primary);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+html[data-device="phone"] dialog.mf-sheet {
+    margin: 0;
+    width: 100%;
+    max-width: 100%;
+    align-self: end;
+    bottom: 0;
+    top: auto;
+    position: fixed;
+    left: 0;
+    right: 0;
+}
+html[data-device="phone"] dialog.mf-sheet .mf-sheet-inner {
+    border-radius: 1rem 1rem 0 0;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+    max-height: 85dvh;
+}
+
+/* "Tap to load" overlay for connection-aware iframe deferral */
+.iframe-tap-load {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    z-index: 3;
+    font-size: 0.9rem;
+    border-radius: inherit;
+}
+
+/* Install prompt button: hidden until beforeinstallprompt fires */
+[data-install-prompt] { display: none !important; }
+html[data-installable="1"] [data-install-prompt] { display: inline-flex !important; }
+
+/* Drag-reorder visual feedback (Sprint 3) */
+.mf-drag-handle {
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    padding: 0.25rem 0.5rem;
+    color: var(--text-secondary);
+}
+.mf-drag-handle:active { cursor: grabbing; }
+.mf-dragging {
+    opacity: 0.5;
+}
+.mf-drag-over {
+    border-top: 2px solid var(--accent);
+}
 """
+
+SERVICE_WORKER_JS = """// Multi-Frames service worker (stale-while-revalidate for HTML, cache-first for assets)
+var CACHE='mf-__CACHE_TOKEN__';
+var SHELL=['/','/login'];
+self.addEventListener('install',function(e){
+  e.waitUntil(caches.open(CACHE).then(function(c){return c.addAll(SHELL).catch(function(){});}));
+  self.skipWaiting();
+});
+self.addEventListener('activate',function(e){
+  e.waitUntil(caches.keys().then(function(keys){
+    return Promise.all(keys.map(function(k){if(k!==CACHE)return caches.delete(k);}));
+  }));
+  self.clients.claim();
+});
+self.addEventListener('fetch',function(e){
+  var req=e.request;
+  if(req.method!=='GET') return;
+  var url=new URL(req.url);
+  if(url.origin!==location.origin) return;
+  // Skip iframe content and proxy
+  if(url.pathname.startsWith('/proxy/')||url.pathname.startsWith('/api/')) return;
+  // Cache-first for branding/manifest/sw
+  if(url.pathname.startsWith('/branding/')||url.pathname==='/manifest.webmanifest'){
+    e.respondWith(caches.match(req).then(function(r){
+      return r||fetch(req).then(function(resp){
+        if(resp&&resp.status===200){
+          var clone=resp.clone();
+          caches.open(CACHE).then(function(c){c.put(req,clone);});
+        }
+        return resp;
+      });
+    }));
+    return;
+  }
+  // Stale-while-revalidate for HTML
+  if(req.headers.get('accept')&&req.headers.get('accept').indexOf('text/html')!==-1){
+    e.respondWith(caches.match(req).then(function(cached){
+      var fetched=fetch(req).then(function(resp){
+        if(resp&&resp.status===200){
+          var clone=resp.clone();
+          caches.open(CACHE).then(function(c){c.put(req,clone);});
+        }
+        return resp;
+      }).catch(function(){return cached;});
+      return cached||fetched;
+    }));
+  }
+});
+"""
+
 
 def generate_dynamic_styles(config):
     """Generate CSS variables from config."""
@@ -4702,31 +5132,31 @@ def render_page(title, content, user=None, config=None):
     else:
         nav_items = '<a href="/login">Login</a>'
     
-    # Build logo HTML
+    # Build logo HTML — prefer cacheable /branding/logo route over inline base64
     branding = config.get("branding", {})
     logo_html = ""
     if branding.get("logo") and branding.get("logo_mime"):
-        logo_html = f'<img src="data:{branding["logo_mime"]};base64,{branding["logo"]}" alt="Logo">'
+        logo_html = '<img src="/branding/logo" alt="Logo">'
     else:
         logo_html = '<span>◈</span>'
-    
-    # Build favicon HTML
+
+    # Build favicon HTML — same: prefer route over base64
     favicon_html = ""
     if branding.get("favicon") and branding.get("favicon_mime"):
-        favicon_html = f'<link rel="icon" type="{branding["favicon_mime"]}" href="data:{branding["favicon_mime"]};base64,{branding["favicon"]}">'
+        favicon_mime = escape_html(branding["favicon_mime"])
+        favicon_html = f'<link rel="icon" type="{favicon_mime}" href="/branding/favicon">'
     else:
         favicon_html = '<link rel="icon" href="data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'><text y=\'.9em\' font-size=\'90\'>◈</text></svg>">'
-    
+
     # Build Apple Touch Icon HTML (for iOS "Add to Home Screen")
     apple_touch_icon_html = ""
     if branding.get("apple_touch_icon") and branding.get("apple_touch_icon_mime"):
-        apple_touch_icon_html = f'<link rel="apple-touch-icon" href="data:{branding["apple_touch_icon_mime"]};base64,{branding["apple_touch_icon"]}">'
+        apple_touch_icon_html = '<link rel="apple-touch-icon" href="/branding/apple-touch-icon">'
 
     # Build Android Icon HTML (for Android "Add to Home Screen")
     android_icon_html = ""
     if branding.get("android_icon") and branding.get("android_icon_mime"):
-        # Android uses a web manifest with icon reference
-        android_icon_html = f'<link rel="icon" sizes="192x192" href="data:{branding["android_icon_mime"]};base64,{branding["android_icon"]}">'
+        android_icon_html = '<link rel="icon" sizes="192x192" href="/branding/android-icon">'
 
     # Header custom text
     header_subtitle = ""
@@ -4741,7 +5171,12 @@ def render_page(title, content, user=None, config=None):
         <header class="{header_class}">
             <div class="container">
                 <a href="/" class="logo">{logo_html} {escape_html(config['settings']['page_title'])}{header_subtitle}</a>
-                <nav>{nav_items}</nav>
+                <nav>
+                    <details class="mf-nav">
+                        <summary aria-label="Menu">☰</summary>
+                        <div class="mf-nav-items">{nav_items}<button type="button" class="btn btn-sm" data-install-prompt>Install App</button></div>
+                    </details>
+                </nav>
             </div>
         </header>
         """
@@ -4775,7 +5210,7 @@ def render_page(title, content, user=None, config=None):
     
     # Generate dynamic styles
     dynamic_styles = generate_dynamic_styles(config)
-    
+
     # Build browser tab title
     settings = config.get("settings", {})
     tab_title = settings.get("tab_title", "").strip()
@@ -4786,20 +5221,136 @@ def render_page(title, content, user=None, config=None):
         full_tab_title = f"{escape_html(tab_title)} | {escape_html(tab_suffix)}"
     else:
         full_tab_title = escape_html(tab_title)
-    
+
+    # Adaptive device profile (server-side guess; client probe refines)
+    req_headers, req_path = _get_request_context()
+    device_profile = detect_device_profile(req_headers, req_path, config)
+
+    # Theme color for browser chrome (Android Chrome / iOS Safari status bar)
+    appearance_colors = appearance.get("colors", {}) if isinstance(appearance, dict) else {}
+    theme_light = appearance_colors.get("accent") or "#3b82f6"
+    theme_dark = appearance_colors.get("bg_primary") or "#0f172a"
+    theme_color_html = (
+        f'<meta name="theme-color" content="{escape_html(theme_light)}" media="(prefers-color-scheme: light)">'
+        f'<meta name="theme-color" content="{escape_html(theme_dark)}" media="(prefers-color-scheme: dark)">'
+    )
+
+    # PWA manifest link (manifest endpoint added in Sprint 2)
+    manifest_html = '<link rel="manifest" href="/manifest.webmanifest">'
+
+    # Client-side capability probe — runs immediately to refine device profile
+    # and set data-device / data-orient / data-standalone on <html>. The
+    # cookie it writes feeds back into server-side detection on subsequent
+    # requests so future renders use the corrected profile.
+    capability_probe = """<script>
+(function(){try{
+  var d=document.documentElement;
+  var w=window.innerWidth, h=window.innerHeight;
+  var touch=matchMedia('(hover:none) and (pointer:coarse)').matches;
+  var standalone=matchMedia('(display-mode:standalone)').matches||window.navigator.standalone===true;
+  var kiosk=location.search.indexOf('kiosk=1')!==-1;
+  var profile;
+  if(kiosk) profile='kiosk';
+  else if(w<=600 && touch) profile='phone';
+  else if(w<=1024 && touch) profile='tablet';
+  else if(touch && w>1024) profile='kiosk';
+  else profile='desktop';
+  d.dataset.device=profile;
+  d.dataset.standalone=standalone?'1':'0';
+  d.dataset.orient=w>h?'land':'port';
+  try{document.cookie='mf_device='+profile+';path=/;max-age=2592000;SameSite=Lax';}catch(e){}
+  addEventListener('resize',function(){
+    d.dataset.orient=window.innerWidth>window.innerHeight?'land':'port';
+  });
+  addEventListener('beforeinstallprompt',function(e){
+    e.preventDefault(); window.__mfInstallPrompt=e; d.dataset.installable='1';
+  });
+}catch(e){}})();
+</script>"""
+
+    # Reusable mobile helpers (haptics, two-step destructive confirm,
+    # password toggle, install prompt trigger). Lightweight, defensive.
+    mobile_helpers = """<script>
+(function(){try{
+  window.mfBuzz=function(p){try{if(navigator.vibrate)navigator.vibrate(p);}catch(e){}};
+  // Two-step destructive confirm: any element with data-confirm="message"
+  // is intercepted on first activation; second tap within 3s actually fires.
+  document.addEventListener('click',function(ev){
+    var t=ev.target.closest('[data-confirm]');
+    if(!t) return;
+    if(t.dataset.confirmed==='1'){return;}
+    ev.preventDefault(); ev.stopPropagation();
+    var orig=t.dataset.origLabel||t.textContent;
+    t.dataset.origLabel=orig;
+    t.textContent='Tap again to confirm';
+    t.classList.add('confirm-pending');
+    window.mfBuzz([20,30,20]);
+    t.dataset.confirmed='1';
+    setTimeout(function(){
+      if(t.dataset.confirmed==='1'){
+        t.textContent=t.dataset.origLabel||orig;
+        t.classList.remove('confirm-pending');
+        delete t.dataset.confirmed;
+      }
+    },3000);
+  },true);
+  // Reusable password-toggle helper: <button data-pw-toggle="inputId">
+  window.mfPwToggle=function(id){
+    var inp=document.getElementById(id); if(!inp) return;
+    inp.type=inp.type==='password'?'text':'password';
+  };
+  document.addEventListener('click',function(ev){
+    var t=ev.target.closest('[data-pw-toggle]');
+    if(t){ev.preventDefault(); window.mfPwToggle(t.dataset.pwToggle);}
+  });
+  // Toast auto-hide for .message.success on phones
+  document.addEventListener('DOMContentLoaded',function(){
+    if(document.documentElement.dataset.device==='phone'){
+      document.querySelectorAll('.message.success').forEach(function(m){
+        setTimeout(function(){m.style.transition='opacity .4s';m.style.opacity='0';
+          setTimeout(function(){m.style.display='none';},400);},3000);
+      });
+    }
+  });
+  // Install prompt button (hidden until beforeinstallprompt fires)
+  document.addEventListener('click',function(ev){
+    var t=ev.target.closest('[data-install-prompt]');
+    if(!t||!window.__mfInstallPrompt) return;
+    ev.preventDefault();
+    window.__mfInstallPrompt.prompt();
+    window.__mfInstallPrompt.userChoice.finally(function(){
+      window.__mfInstallPrompt=null;
+      document.documentElement.dataset.installable='0';
+    });
+  });
+}catch(e){}})();
+</script>"""
+
+    # Service worker registration (gated on secure context, see /sw.js route)
+    sw_register = """<script>
+if('serviceWorker' in navigator && window.isSecureContext){
+  addEventListener('load',function(){
+    navigator.serviceWorker.register('/sw.js').catch(function(){});
+  });
+}
+</script>"""
+
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-device="{device_profile}">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    {theme_color_html}
     <title>{full_tab_title}</title>
     {favicon_html}
     {apple_touch_icon_html}
     {android_icon_html}
+    {manifest_html}
     <style>{dynamic_styles}{CSS_STYLES}</style>
+    {capability_probe}
 </head>
 <body>
     {bg_overlay}
@@ -4808,6 +5359,8 @@ def render_page(title, content, user=None, config=None):
         {content}
     </main>
     {footer_html}
+    {mobile_helpers}
+    {sw_register}
 </body>
 </html>"""
 
@@ -6140,10 +6693,12 @@ def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
                     # both for direct access (page at /) and through the cloud
                     # tunnel (page at /api/tunnel/proxy/<tid>/).
                     iframe_url = f'proxy/{i}{hash_frag}'
+                fpri = 'high' if i == 0 else 'low'
+                onload_attr = "this.parentNode.classList.add('loaded')"
                 if wrapper_style_str:
-                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe></div>'
+                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" fetchpriority="{fpri}" onload="{onload_attr}" {sandbox_attr}></iframe></div>'
                 else:
-                    iframe_inner = f'<iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe>'
+                    iframe_inner = f'<div class="iframe-wrapper"><iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" fetchpriority="{fpri}" onload="{onload_attr}" {sandbox_attr}></iframe></div>'
             
             # Fallback placeholder (hidden by default)
             fallback_div = f'<div id="fallback-{i}" class="iframe-fallback" style="display:none;height:{height}px;"></div>'
@@ -6485,7 +7040,7 @@ def render_admin_page(user, config, message=None, error=None):
                             </div>
                             <div class="form-group" style="flex:2;">
                                 <label>URL {"" if allow_external else "(Local IPs only)"}</label>
-                                <input type="url" name="url" value="{url}" required>
+                                <input type="url" inputmode="url" autocomplete="url" name="url" value="{url}" required>
                             </div>
                         </div>
                     </div>
@@ -6744,11 +7299,11 @@ def render_admin_page(user, config, message=None, error=None):
                     <div class="inline-form">
                         <div class="form-group">
                             <label>New Password</label>
-                            <input type="password" name="new_password" required minlength="6" placeholder="Minimum 6 characters">
+                            <input type="password" name="new_password" required minlength="6" placeholder="Minimum 6 characters" autocomplete="new-password">
                         </div>
                         <div class="form-group">
                             <label>Confirm Password</label>
-                            <input type="password" name="confirm_password" required minlength="6" placeholder="Repeat password">
+                            <input type="password" name="confirm_password" required minlength="6" placeholder="Repeat password" autocomplete="new-password">
                         </div>
                     </div>
                     <div style="display:flex;gap:0.5rem;margin-top:1rem;">
@@ -6953,7 +7508,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/iframe/add">
                     <div class="inline-form" style="margin-bottom:1rem;">
                         <div class="form-group"><label>Name</label><input type="text" name="name" placeholder="Display name" required></div>
-                        <div class="form-group" style="flex:2;"><label>URL</label><input type="url" name="url" placeholder="http://192.168.1.100:8000" required></div>
+                        <div class="form-group" style="flex:2;"><label>URL</label><input type="url" inputmode="url" autocomplete="url" name="url" placeholder="http://192.168.1.100:8000" required></div>
                         <div class="form-group" style="flex:0.5;"><label>Height (px)</label><input type="number" name="height" value="400" min="100" max="2000"></div>
                     </div>
                     <details style="margin-bottom:1rem;">
@@ -7080,7 +7635,7 @@ def render_admin_page(user, config, message=None, error=None):
                     </div>
                     <div id="image-options" style="display:{"block" if bg.get("type") == "image" else "none"};">
                         <div class="inline-form">
-                            <div class="form-group" style="flex:2;"><label>Upload Image (max 2MB)</label><input type="file" name="bg_image" accept="image/*" style="padding:0.5rem;"></div>
+                            <div class="form-group" style="flex:2;"><label>Upload Image (max 2MB)</label><input type="file" name="bg_image" accept="image/*" capture="environment" style="padding:0.5rem;"></div>
                             <div class="form-group"><label>Size</label>
                                 <select name="image_size">
                                     <option value="cover" {"selected" if bg.get("image_size") == "cover" else ""}>Cover</option>
@@ -7221,26 +7776,26 @@ def render_admin_page(user, config, message=None, error=None):
         <div class="admin-content">
             <div class="admin-subsection"><h4>Logo</h4>{logo_preview}
                 <form method="POST" action="/admin/branding/logo" enctype="multipart/form-data" class="inline-form">
-                    <div class="form-group" style="flex:2;"><label>Upload Logo (max 500KB)</label><input type="file" name="logo" accept="image/*" required style="padding:0.5rem;"></div>
+                    <div class="form-group" style="flex:2;"><label>Upload Logo (max 500KB)</label><input type="file" name="logo" accept="image/*" capture="environment" required style="padding:0.5rem;"></div>
                     <button type="submit">Upload</button>
                 </form>
             </div>
             <div class="admin-subsection"><h4>Favicon</h4>{favicon_preview}
                 <form method="POST" action="/admin/branding/favicon" enctype="multipart/form-data" class="inline-form">
-                    <div class="form-group" style="flex:2;"><label>Upload Favicon (max 500KB)</label><input type="file" name="favicon" accept="image/*" required style="padding:0.5rem;"></div>
+                    <div class="form-group" style="flex:2;"><label>Upload Favicon (max 500KB)</label><input type="file" name="favicon" accept="image/*" capture="environment" required style="padding:0.5rem;"></div>
                     <button type="submit">Upload</button>
                 </form>
             </div>
             <div class="admin-subsection"><h4>📱 iOS Home Screen Icon</h4>{apple_touch_icon_preview}
                 <form method="POST" action="/admin/branding/apple-touch-icon" enctype="multipart/form-data" class="inline-form">
-                    <div class="form-group" style="flex:2;"><label>Upload Icon (PNG, 180x180px recommended, max 500KB)</label><input type="file" name="apple_touch_icon" accept="image/png" required style="padding:0.5rem;"></div>
+                    <div class="form-group" style="flex:2;"><label>Upload Icon (PNG, 180x180px recommended, max 500KB)</label><input type="file" name="apple_touch_icon" accept="image/png" capture="environment" required style="padding:0.5rem;"></div>
                     <button type="submit">Upload</button>
                 </form>
                 <small style="color:var(--text-secondary);display:block;margin-top:0.8rem;">This icon appears when users tap "Add to Home Screen" on iPhone/iPad. Use a square PNG image (180x180px for best quality). iOS will automatically add rounded corners.</small>
             </div>
             <div class="admin-subsection"><h4>🤖 Android Home Screen Icon</h4>{android_icon_preview}
                 <form method="POST" action="/admin/branding/android-icon" enctype="multipart/form-data" class="inline-form">
-                    <div class="form-group" style="flex:2;"><label>Upload Icon (PNG, 192x192px recommended, max 500KB)</label><input type="file" name="android_icon" accept="image/png" required style="padding:0.5rem;"></div>
+                    <div class="form-group" style="flex:2;"><label>Upload Icon (PNG, 192x192px recommended, max 500KB)</label><input type="file" name="android_icon" accept="image/png" capture="environment" required style="padding:0.5rem;"></div>
                     <button type="submit">Upload</button>
                 </form>
                 <small style="color:var(--text-secondary);display:block;margin-top:0.8rem;">This icon appears when users tap "Add to Home Screen" on Android devices. Use a square PNG image (192x192px for best quality).</small>
@@ -7258,7 +7813,7 @@ def render_admin_page(user, config, message=None, error=None):
             <hr style="border:none;border-top:1px solid var(--border);margin:1.5rem 0;">
             <form method="POST" action="/admin/user/add" class="inline-form">
                 <div class="form-group"><label>Username</label><input type="text" name="username" required pattern="[a-zA-Z0-9_]+"></div>
-                <div class="form-group"><label>Password</label><input type="password" name="password" required minlength="6"></div>
+                <div class="form-group"><label>Password</label><input type="password" name="password" required minlength="6" autocomplete="new-password"></div>
                 <div class="form-group" style="flex:0.5;"><label>Role</label><select name="is_admin"><option value="0">User</option><option value="1">Admin</option></select></div>
                 <button type="submit">Add User</button>
             </form>
@@ -7351,7 +7906,7 @@ def render_admin_page(user, config, message=None, error=None):
                 </div>
                 <div class="form-group" style="margin-bottom:1rem;">
                     <label>Fallback Image (max 500KB)</label>
-                    <input type="file" name="fallback_img" accept="image/*" style="padding:0.5rem;">
+                    <input type="file" name="fallback_img" accept="image/*" capture="environment" style="padding:0.5rem;">
                     {f'<div class="preview-box" style="margin-top:0.5rem;"><img src="data:{config.get("fallback_image", {}).get("image_mime", "image/png")};base64,{config.get("fallback_image", {}).get("image", "")}" style="max-height:100px;max-width:200px;border-radius:var(--radius);"></div>' if config.get('fallback_image', {}).get('image') else ''}
                 </div>
                 <div style="display:flex;gap:0.5rem;">
@@ -7379,7 +7934,7 @@ def render_admin_page(user, config, message=None, error=None):
                 </div>
                 <div class="form-group" style="margin-bottom:1rem;">
                     <label>Cloud URL</label>
-                    <input type="url" name="cloud_url" value="{escape_html(config.get('cloud', {}).get('url', ''))}" placeholder="https://your-worker.workers.dev">
+                    <input type="url" inputmode="url" autocomplete="url" name="cloud_url" value="{escape_html(config.get('cloud', {}).get('url', ''))}" placeholder="https://your-worker.workers.dev">
                     <small style="color:var(--text-secondary);display:block;margin-top:0.25rem;">Your Cloudflare Worker URL</small>
                 </div>
                 <div class="form-group" style="margin-bottom:1rem;">
@@ -7823,7 +8378,7 @@ def render_password_reset_requests(config):
                     {f"""
                     <form method="POST" action="/admin/password-reset/set" style="display:flex;gap:0.25rem;align-items:center;">
                         <input type="hidden" name="request_id" value="{req_id}">
-                        <input type="password" name="new_password" placeholder="New password" required minlength="6" style="width:140px;padding:0.4rem;">
+                        <input type="password" name="new_password" placeholder="New password" required minlength="6" style="width:140px;padding:0.4rem;" autocomplete="new-password">
                         <button type="submit" class="btn btn-sm">Set Password</button>
                     </form>
                     """ if user_exists else ""}
@@ -8196,7 +8751,7 @@ def render_footer_links_editor(links):
             </div>
             <div class="form-group" style="flex:2;margin-bottom:0;">
                 <label style="font-size:0.75rem;">URL</label>
-                <input type="url" name="url" placeholder="https://github.com/..." required>
+                <input type="url" inputmode="url" autocomplete="url" name="url" placeholder="https://github.com/..." required>
             </div>
             <button type="submit" class="btn btn-sm" style="margin-bottom:0;">+ Add</button>
         </div>
@@ -8547,10 +9102,10 @@ def render_raspberry_pi_section():
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
                     <form method="POST" action="/admin/system/pi-reboot" onsubmit="return confirm('Reboot the Raspberry Pi now?')">
-                        <button type="submit" class="btn btn-secondary btn-sm">🔄 Reboot Pi</button>
+                        <button type="submit" class="btn btn-secondary btn-sm" data-confirm="Reboot Pi?">🔄 Reboot Pi</button>
                     </form>
                     <form method="POST" action="/admin/system/pi-shutdown" onsubmit="return confirm('Shutdown the Raspberry Pi? You will need physical access to turn it back on.')">
-                        <button type="submit" class="btn btn-danger btn-sm">⏻ Shutdown Pi</button>
+                        <button type="submit" class="btn btn-danger btn-sm" data-confirm="Shutdown Pi?">⏻ Shutdown Pi</button>
                     </form>
                     <button type="button" class="btn btn-secondary btn-sm" onclick="refreshPiTemp()">🌡️ Refresh Temp</button>
                 </div>
@@ -9820,6 +10375,114 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(body.encode('utf-8'))
+
+    def _config_etag(self, config):
+        """Build an ETag derived from config + version for cache busting."""
+        import hashlib as _hl
+        try:
+            seed = (str(config.get("settings", {}).get("page_title", "")) +
+                    str(config.get("branding", {}).get("logo_mime", "")) +
+                    str(config.get("branding", {}).get("favicon_mime", "")) +
+                    str(config.get("appearance", {}).get("colors", {})) +
+                    VERSION)
+        except Exception:
+            seed = VERSION
+        return '"' + _hl.sha1(seed.encode("utf-8")).hexdigest()[:16] + '"'
+
+    def _serve_manifest(self, config):
+        """Serve the PWA web app manifest."""
+        import json as json_mod
+        settings = config.get("settings", {})
+        appearance = config.get("appearance", {})
+        colors = appearance.get("colors", {}) if isinstance(appearance, dict) else {}
+        name = settings.get("page_title", "Multi-Frames")
+        short = (name[:12] if name else "Multi-Frames")
+        manifest = {
+            "name": name,
+            "short_name": short,
+            "start_url": "/",
+            "scope": "/",
+            "display": "standalone",
+            "orientation": "any",
+            "theme_color": colors.get("accent") or "#3b82f6",
+            "background_color": colors.get("bg_primary") or "#0f172a",
+            "description": settings.get("tab_suffix", "Multi-Frames dashboard"),
+            "icons": [
+                {"src": "/branding/icon-192", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+                {"src": "/branding/icon-512", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+            ],
+        }
+        body = json_mod.dumps(manifest).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/manifest+json")
+        self.send_header("Cache-Control", "public, max-age=300")
+        self.send_header("ETag", self._config_etag(config))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_service_worker(self, config):
+        """Serve a minimal stale-while-revalidate service worker."""
+        cache_token = self._config_etag(config).strip('"')
+        sw = SERVICE_WORKER_JS.replace("__CACHE_TOKEN__", cache_token)
+        body = sw.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/javascript")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Service-Worker-Allowed", "/")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_branding_asset(self, path, config):
+        """Serve branding image bytes (logo/favicon/icons) from base64 config."""
+        import base64 as _b64
+        branding = config.get("branding", {}) or {}
+        # Map URL slug → (config field, mime field, default fallback)
+        slug = path[len("/branding/"):]
+        mapping = {
+            "logo":             ("logo",              "logo_mime"),
+            "favicon":          ("favicon",           "favicon_mime"),
+            "apple-touch-icon": ("apple_touch_icon",  "apple_touch_icon_mime"),
+            "android-icon":     ("android_icon",      "android_icon_mime"),
+            "icon-192":         ("android_icon",      "android_icon_mime"),
+            "icon-512":         ("android_icon",      "android_icon_mime"),
+        }
+        if slug not in mapping:
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Not found")
+            return
+        field, mime_field = mapping[slug]
+        b64 = branding.get(field)
+        mime = branding.get(mime_field)
+        if not b64 or not mime:
+            # No upload configured — emit a tiny SVG placeholder for icons
+            svg = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">\xe2\x97\x88</text></svg>'
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(svg)
+            return
+        # ETag short-circuit
+        etag = self._config_etag(config)
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.end_headers()
+            return
+        try:
+            data = _b64.b64decode(b64)
+        except Exception:
+            self.send_response(404)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Cache-Control", "public, max-age=86400, immutable")
+        self.send_header("ETag", etag)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
     
     def _handle_request_error(self, error, method):
         """Handle and log request errors gracefully."""
@@ -9887,6 +10550,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         """Handle GET requests with comprehensive error handling."""
         try:
+            _set_request_context(self.headers, self.path)
             self._handle_get()
         except BrokenPipeError:
             # Client disconnected - this is normal, don't log as error
@@ -9984,6 +10648,15 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_html(render_page("Error", f'<div class="card"><h2>Error</h2><p>{escape_html(str(e))}</p></div>', user, config), 500)
         
+        elif path == '/manifest.webmanifest':
+            self._serve_manifest(config)
+
+        elif path == '/sw.js':
+            self._serve_service_worker(config)
+
+        elif path.startswith('/branding/'):
+            self._serve_branding_asset(path, config)
+
         elif path == '/api/client-info':
             # Return client connection information
             client_ip = self.client_address[0]
@@ -10197,6 +10870,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         """Handle POST requests with comprehensive error handling."""
         try:
+            _set_request_context(self.headers, self.path)
             self._handle_post()
         except BrokenPipeError:
             # Client disconnected - this is normal

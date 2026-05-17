@@ -5,6 +5,50 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-05-17
+
+### Added — Mobile UI overhaul (adaptive + PWA)
+- **Adaptive device profile**: every request is classified as `phone`, `tablet`, `kiosk`, or `desktop` and emitted as `data-device="..."` on `<html>`. Server-side detection uses User-Agent, `Sec-CH-UA-Mobile` client hints, hostname pinning (`config.settings.kiosk_hosts`), the `?kiosk=1` query override, and an `mf_device` cookie set by the client capability probe. CSS keys off `html[data-device="..."]` so every layout decision is now adaptive without media-query brittleness.
+- **Client capability probe**: tiny inline script runs at page load to refine the server's guess from real viewport size, `(hover:none) and (pointer:coarse)`, `display-mode:standalone`, and orientation. Sets `data-orient`, `data-standalone`, and writes `mf_device` cookie so the next request renders the right shell.
+- **PWA web manifest** at `/manifest.webmanifest` — dynamic name, theme color, and icon list derived from branding/appearance config. Enables real "Add to Home Screen" install on Android Chrome and iOS Safari.
+- **Service worker** at `/sw.js` — stale-while-revalidate for HTML, cache-first for `/branding/*` and `/manifest.webmanifest`. Cache token derived from config so saves bust the cache automatically. Offline-tolerant dashboard.
+- **Branding asset routes** at `/branding/{logo,favicon,apple-touch-icon,android-icon,icon-192,icon-512}` — replace base64 data URLs with byte-streamed images carrying `Cache-Control` + `ETag` (304 supported). Cuts page weight on every render; pairs with the service worker for instant repeat loads.
+- **`<meta name="theme-color">`** light + dark variants tint Android Chrome chrome and iOS Safari status bar.
+- **Viewport** now declares `viewport-fit=cover` + `interactive-widget=resizes-content` for full safe-area usage on notched iPhones and proper virtual-keyboard handling.
+- **`100dvh` viewport units** for iframe sizing on phones, so mobile Safari URL-bar resize no longer causes layout jumps.
+- **Install prompt button** in the hamburger menu, hidden until `beforeinstallprompt` fires.
+
+### Added — Touch & navigation upgrades
+- **Hamburger nav drawer** on phones (zero-JS via `<details>`). Logo + ☰ when collapsed; flat row of links on tablet/kiosk/desktop.
+- **Bottom tab bar** for admin sections on phones with `env(safe-area-inset-bottom)` padding — admin tabs render as fixed thumb-reach navigation.
+- **Two-step destructive confirm** for the Pi Reboot/Shutdown buttons: first tap morphs to "Tap again to confirm" with a 3s reset and a red pulse animation. Driven by `data-confirm` attribute + intercepting capture-phase click handler.
+- **Haptic feedback helper** (`window.mfBuzz(pattern)`) gated on `navigator.vibrate`.
+- **Reusable password-toggle helper** (`window.mfPwToggle(id)` + `[data-pw-toggle]`) ready for reuse across admin password inputs.
+- **Skeleton shimmer** on iframe wrappers while remote content loads; respects `prefers-reduced-motion`.
+- **Toast notification** behavior for `.message.success` on phones: pinned bottom, auto-hides after 3s.
+- **Sticky save bar** styling (`.form-actions.sticky-bottom`) for long edit forms.
+- **Card press feedback** (`scale(0.99)`) on touch devices.
+- **`content-visibility: auto`** on inactive admin tab panels for paint perf.
+- **`<dialog class="mf-sheet">`** scaffolding (CSS-ready) for future bottom-sheet edit forms.
+
+### Added — Form & input UX
+- **`inputmode="url"` + `autocomplete="url"`** on every URL input (iframe URL, cloud URL).
+- **`capture="environment"`** on every image-upload input (logo, favicon, apple/android icons, background, fallback image) so phone users get the camera as an option.
+- **`autocomplete="new-password"` / `"current-password"`** hints on password inputs to play nicely with password managers.
+
+### Added — iframe performance
+- `loading="lazy"` confirmed on all dashboard iframes; `fetchpriority="high"` on the first iframe and `"low"` on subsequent ones.
+- `onload` hook removes the skeleton shimmer once the frame is ready.
+
+### Added — Tests
+- 11 new unit tests for `detect_device_profile()` covering iPhone, iPad, Android phone/tablet, desktop fallback, query-string kiosk override, cookie override, invalid cookie pass-through, client-hint mobile, missing headers, and missing UA.
+- 5 new server tests for `/manifest.webmanifest`, `/sw.js`, `/branding/logo` placeholder, `/branding/<unknown>` 404, and HTML mobile-UI meta-tag presence.
+- Total test count: 55 (up from 39).
+
+### Changed
+- `render_page()` now reads request context from a thread-local set by `do_GET`/`do_POST`, so every rendered page can declare its device profile without changing call sites.
+- Branding images are no longer embedded as base64 data URLs by default (clears a long-standing TODO item) — they're served from `/branding/*` with proper cache headers.
+
 ## [1.4.8] - 2026-04-16
 
 ### Added

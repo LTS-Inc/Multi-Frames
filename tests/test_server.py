@@ -224,6 +224,47 @@ class ServerIntegrationTests(unittest.TestCase):
         self.assertIn("ADMIN_SEES_ALPHA", body)
         self.assertIn("ADMIN_SEES_BETA", body)
 
+    # ---- PWA / mobile UI routes ------------------------------------------
+
+    def test_manifest_endpoint_serves_pwa_manifest(self):
+        resp = self._get("/manifest.webmanifest")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.headers.get("Content-Type", ""), "application/manifest+json")
+        import json
+        body = json.loads(resp.read().decode("utf-8"))
+        self.assertIn("name", body)
+        self.assertIn("start_url", body)
+        self.assertEqual(body["start_url"], "/")
+        self.assertEqual(body["display"], "standalone")
+        self.assertTrue(len(body.get("icons", [])) >= 2)
+
+    def test_service_worker_endpoint(self):
+        resp = self._get("/sw.js")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("javascript", resp.headers.get("Content-Type", ""))
+        body = resp.read().decode("utf-8")
+        # Cache token must have been substituted (no raw placeholder left)
+        self.assertNotIn("__CACHE_TOKEN__", body)
+        self.assertIn("addEventListener('fetch'", body)
+
+    def test_branding_endpoint_serves_placeholder_when_unset(self):
+        # No logo uploaded — should still return 200 with an SVG placeholder
+        resp = self._get("/branding/logo")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("image/", resp.headers.get("Content-Type", ""))
+
+    def test_branding_endpoint_unknown_slug_returns_404(self):
+        resp = self._get("/branding/nope")
+        self.assertEqual(resp.status, 404)
+
+    def test_html_includes_device_profile_attribute(self):
+        resp = self._get("/login")
+        body = resp.read().decode("utf-8", "replace")
+        self.assertIn('data-device="', body)
+        self.assertIn("manifest.webmanifest", body)
+        self.assertIn("theme-color", body)
+        self.assertIn("viewport-fit=cover", body)
+
     def test_proxy_rejects_redirect_to_external(self):
         """Regression for REVIEW.md §1.1 — will FAIL on unpatched code."""
         upstream = _RedirectingUpstream("http://example.com/")

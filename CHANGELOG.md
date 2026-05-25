@@ -5,6 +5,18 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.9] - 2026-05-25
+
+### Added
+- **Soundtrack Your Brand integration**: connect Multi-Frames to the Soundtrack Your Brand music API and control music zones from the dashboard.
+  - New **Soundtrack** widget type — a full control panel showing now playing (track, artist, album art, sound-zone name), playback state, and controls (play/pause, skip, volume). Each widget targets its own sound zone, stored in the widget's `content` field.
+  - Admin **Settings → Soundtrack Your Brand** section to enable the integration and store the API token. The token is held server-side only and is never rendered into any page (the inline config view redacts it, alongside the cloud device key).
+  - Server-side proxy endpoints keep the token out of the browser: `GET /api/soundtrack/zones` (admin-only, lists sound zones for the widget editor), `GET /api/soundtrack/now-playing` (any logged-in user, short TTL cache per zone), and `POST /api/soundtrack/control` (any logged-in user; play/pause/skip/volume).
+  - `soundtrack_graphql()` helper performs authenticated GraphQL calls to a fixed host using only the standard library.
+
+### Security
+- The inline (sanitized) admin config view now redacts `soundtrack.api_token` and `cloud.device_key` so secrets are not exposed in the rendered admin page.
+
 ## [1.4.8] - 2026-04-16
 
 ### Added

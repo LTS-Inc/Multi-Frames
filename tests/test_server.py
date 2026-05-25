@@ -131,6 +131,18 @@ class ServerIntegrationTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e
 
+    def _post_json(self, path, body, cookie=None):
+        import json
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(self.server.base + path, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        if cookie:
+            req.add_header("Cookie", f"session={cookie}")
+        try:
+            return urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as e:
+            return e
+
     # ---- tests -------------------------------------------------------------
 
     def test_login_page_served_when_unauthenticated(self):
@@ -249,6 +261,28 @@ class ServerIntegrationTests(unittest.TestCase):
                              "SSRF: proxy followed redirect to external host")
         finally:
             upstream.close()
+
+    def test_soundtrack_nowplaying_requires_auth(self):
+        resp = self._get("/api/soundtrack/now-playing?zone=abc")
+        self.assertEqual(resp.status, 401)
+
+    def test_soundtrack_control_requires_auth(self):
+        resp = self._post_json("/api/soundtrack/control",
+                               {"action": "play", "zone": "abc"})
+        self.assertEqual(resp.status, 401)
+
+    def test_soundtrack_zones_requires_admin(self):
+        mf = self.mf
+        cfg = mf.load_config()
+        cfg["users"]["bob"] = {
+            "password_hash": mf.hash_password("builder"),
+            "is_admin": False,
+        }
+        mf.save_config(cfg)
+        login = self._post_form("/login", {"username": "bob", "password": "builder"})
+        session = _extract_session(login.headers.get("Set-Cookie", ""))
+        resp = self._get("/api/soundtrack/zones", cookie=session)
+        self.assertEqual(resp.status, 403)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

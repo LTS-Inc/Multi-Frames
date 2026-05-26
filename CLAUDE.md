@@ -129,6 +129,7 @@ python -m multi_frames --port 8080
 - Clock, weather, buttons, text, images
 - Command buttons (TCP/UDP/Telnet)
 - Raspberry Pi monitoring card
+- Soundtrack widget: now-playing + playback controls for a Soundtrack Your Brand sound zone (per-widget zone in `content`; token configured in Admin → Settings, proxied server-side via `/api/soundtrack/*`)
 - Stable 8-char hex `id` on every widget (backfilled on upgrade)
 
 ### 3. User Authentication & Permissions
@@ -179,6 +180,8 @@ python -m multi_frames --port 8080
 | `/admin` | GET | Admin panel |
 | `/help` | GET | Help/diagnostics |
 | `/api/send-command` | POST | Send network command |
+| `/api/soundtrack/now-playing` | GET | Soundtrack zone now-playing + playback state (cached) |
+| `/api/soundtrack/control` | POST | Soundtrack playback control (play/pause/skip/volume) |
 
 ### Admin Only
 | Endpoint | Method | Description |
@@ -189,7 +192,8 @@ python -m multi_frames --port 8080
 | `/admin/user/delete` | POST | Delete a user |
 | `/admin/user/change-password` | POST | Change a user's password |
 | `/admin/user/permissions` | POST | Set `allowed_iframes` / `allowed_widgets` for a user (or reset to see-all) |
-| `/admin/settings/*` | POST | System settings |
+| `/admin/settings/*` | POST | System settings (includes `/admin/settings/soundtrack` for the API token) |
+| `/api/soundtrack/zones` | GET | List Soundtrack sound zones for the widget editor |
 
 ## Testing
 

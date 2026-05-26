@@ -241,5 +241,79 @@ class PermissionFilterTests(_MFTestBase):
         self.assertEqual(len(wgs), 2)  # None => see all widgets
 
 
+class SoundtrackConfigTests(_MFTestBase):
+    def test_blank_token_preserves_existing(self):
+        cfg = {"soundtrack": {"enabled": True, "api_token": "SECRET123"}}
+        self.mf.apply_soundtrack_settings(cfg, enabled=False, token="")
+        # Blank submit must not clear the stored secret.
+        self.assertEqual(cfg["soundtrack"]["api_token"], "SECRET123")
+        self.assertFalse(cfg["soundtrack"]["enabled"])
+
+    def test_new_token_overwrites(self):
+        cfg = {"soundtrack": {"enabled": False, "api_token": "OLD"}}
+        self.mf.apply_soundtrack_settings(cfg, enabled=True, token="NEW")
+        self.assertEqual(cfg["soundtrack"]["api_token"], "NEW")
+        self.assertTrue(cfg["soundtrack"]["enabled"])
+
+    def test_creates_section_when_missing(self):
+        cfg = {}
+        self.mf.apply_soundtrack_settings(cfg, enabled=True, token="ABC")
+        self.assertEqual(cfg["soundtrack"], {"enabled": True, "api_token": "ABC"})
+
+    def test_get_soundtrack_config_defaults(self):
+        self.assertEqual(self.mf.get_soundtrack_config({}), (False, ""))
+        enabled, token = self.mf.get_soundtrack_config(
+            {"soundtrack": {"enabled": True, "api_token": "T"}})
+        self.assertTrue(enabled)
+        self.assertEqual(token, "T")
+
+
+class SoundtrackGraphQLTests(_MFTestBase):
+    def test_blank_token_short_circuits(self):
+        # No network call should happen without a token.
+        ok, result = self.mf.soundtrack_graphql("", "query {}")
+        self.assertFalse(ok)
+        self.assertEqual(result, {"error": "Soundtrack not configured"})
+
+    def test_parses_data(self):
+        import json
+        from unittest import mock
+
+        class _Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return json.dumps({"data": {"hello": "world"}}).encode()
+
+        with mock.patch.object(self.mf.urllib.request, "urlopen", return_value=_Resp()):
+            ok, data = self.mf.soundtrack_graphql("tok", "query {}")
+        self.assertTrue(ok)
+        self.assertEqual(data, {"hello": "world"})
+
+    def test_surfaces_graphql_errors(self):
+        import json
+        from unittest import mock
+
+        class _Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self):
+                return json.dumps({"errors": [{"message": "bad zone"}]}).encode()
+
+        with mock.patch.object(self.mf.urllib.request, "urlopen", return_value=_Resp()):
+            ok, result = self.mf.soundtrack_graphql("tok", "query {}")
+        self.assertFalse(ok)
+        self.assertEqual(result, {"error": "bad zone"})
+
+    def test_maps_401_to_invalid_token(self):
+        from unittest import mock
+
+        err = self.mf.urllib.error.HTTPError(
+            url="x", code=401, msg="Unauthorized", hdrs=None, fp=None)
+        with mock.patch.object(self.mf.urllib.request, "urlopen", side_effect=err):
+            ok, result = self.mf.soundtrack_graphql("tok", "query {}")
+        self.assertFalse(ok)
+        self.assertEqual(result, {"error": "Invalid API token"})
+
+
 if __name__ == "__main__":
     unittest.main()

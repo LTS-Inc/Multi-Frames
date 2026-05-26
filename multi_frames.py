@@ -295,8 +295,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.8"
-VERSION_DATE = "2026-04-16"
+VERSION = "1.4.9"
+VERSION_DATE = "2026-05-25"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -3100,6 +3100,102 @@ def save_config_safe(config):
     success, error = save_config(config)
     return error
 
+
+# =============================================================================
+# Soundtrack Your Brand integration
+# =============================================================================
+SOUNDTRACK_API_URL = "https://api.soundtrackyourbrand.com/v2"
+SOUNDTRACK_CACHE_TTL = 8  # seconds to cache now-playing per zone
+_soundtrack_cache = {}    # zone_id -> (timestamp, payload)
+
+SOUNDTRACK_ZONES_QUERY = """
+query Me {
+  me {
+    ... on PublicAPIClient {
+      accounts(first: 100) {
+        edges { node {
+          id businessName
+          soundZones(first: 100) { edges { node { id name } } }
+        } }
+      }
+    }
+  }
+}
+"""
+
+SOUNDTRACK_NOWPLAYING_QUERY = """
+query NowPlaying($zone: ID!) {
+  soundZone(id: $zone) {
+    id name
+    playback { state volume }
+    nowPlaying { track { name artists { name } album { image { url } } } }
+  }
+}
+"""
+
+SOUNDTRACK_MUTATIONS = {
+    'play':   "mutation($zone: ID!){ play(input:{soundZone:$zone}){ status } }",
+    'pause':  "mutation($zone: ID!){ pause(input:{soundZone:$zone}){ status } }",
+    'skip':   "mutation($zone: ID!){ skipTrack(input:{soundZone:$zone}){ status } }",
+    'volume': "mutation($zone: ID!, $v: Int!){ setVolume(input:{soundZone:$zone, volume:$v}){ status } }",
+}
+
+
+def get_soundtrack_config(config):
+    """Return (enabled, api_token) for the Soundtrack integration."""
+    sb = config.get("soundtrack", {})
+    return sb.get("enabled", False), sb.get("api_token", "")
+
+
+def apply_soundtrack_settings(config, enabled, token):
+    """Update the soundtrack config section. A blank token preserves the
+    existing one so the secret is never cleared by an empty form submit."""
+    sb = config.setdefault("soundtrack", {})
+    sb["enabled"] = bool(enabled)
+    if token:
+        sb["api_token"] = token
+    else:
+        sb.setdefault("api_token", "")
+    return config
+
+
+def soundtrack_graphql(token, query, variables=None, timeout=10):
+    """POST a GraphQL query to Soundtrack. Returns (ok, data_or_error_dict).
+
+    Soundtrack lives at a fixed, hardcoded host, so this carries no SSRF
+    concern and must NOT be routed through the /proxy/ endpoint.
+    """
+    if not token:
+        return False, {"error": "Soundtrack not configured"}
+
+    import ssl
+    body = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
+    req = urllib.request.Request(
+        SOUNDTRACK_API_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {token}",
+            "User-Agent": f"Multi-Frames/{VERSION}",
+        },
+        method="POST",
+    )
+    try:
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            parsed = json.loads(resp.read().decode("utf-8"))
+        if parsed.get("errors"):
+            msg = parsed["errors"][0].get("message", "GraphQL error")
+            return False, {"error": msg}
+        return True, parsed.get("data", {})
+    except urllib.error.HTTPError as e:
+        detail = "Invalid API token" if e.code in (401, 403) else f"HTTP {e.code}"
+        return False, {"error": detail}
+    except (urllib.error.URLError, socket.timeout):
+        return False, {"error": "Connection to Soundtrack failed"}
+    except (ValueError, json.JSONDecodeError):
+        return False, {"error": "Invalid response from Soundtrack"}
+
 def check_config_writable():
     """Check if config file is writable."""
     try:
@@ -5867,6 +5963,70 @@ def render_widget(widget, config):
             buttons_html = '<div class="widget-placeholder">No buttons configured</div>'
         
         inner = f'<div class="widget-buttons">{buttons_html}</div>'
+    elif wtype == 'soundtrack':
+        sb_enabled = config.get('soundtrack', {}).get('enabled', False)
+        sb_token = config.get('soundtrack', {}).get('api_token', '')
+        zone_id = content.strip() if content else ''
+        widget_id = f"soundtrack-{id(widget)}"
+        if not sb_enabled or not sb_token:
+            inner = '<div class="widget-placeholder">🎵 Soundtrack not configured</div>'
+        elif not zone_id:
+            inner = '<div class="widget-placeholder">No sound zone selected</div>'
+        else:
+            zone_js = json.dumps(zone_id)
+            inner = f'''
+            <div class="widget-soundtrack" id="{widget_id}">
+              <div class="st-zone" id="{widget_id}-zone" style="font-size:0.8rem;opacity:0.7;text-align:center;"></div>
+              <div class="st-art-wrap" style="text-align:center;margin:0.5rem 0;">
+                <img id="{widget_id}-art" alt="" style="max-width:120px;border-radius:6px;display:none;">
+              </div>
+              <div class="st-track" id="{widget_id}-track" style="font-weight:600;text-align:center;">Loading...</div>
+              <div class="st-artist" id="{widget_id}-artist" style="font-size:0.85rem;opacity:0.8;text-align:center;"></div>
+              <div class="st-controls" style="display:flex;gap:0.5rem;justify-content:center;align-items:center;margin-top:0.75rem;">
+                <button type="button" class="st-btn" id="{widget_id}-playpause" title="Play/Pause" style="cursor:pointer;font-size:1.2rem;background:none;border:none;color:inherit;">▶️</button>
+                <button type="button" class="st-btn" id="{widget_id}-skip" title="Skip" style="cursor:pointer;font-size:1.2rem;background:none;border:none;color:inherit;">⏭️</button>
+                <input type="range" id="{widget_id}-vol" min="0" max="16" value="8" title="Volume" style="width:100px;">
+              </div>
+              <div class="st-error" id="{widget_id}-error" style="font-size:0.75rem;color:#ef4444;text-align:center;margin-top:0.25rem;"></div>
+            </div>
+            <script>
+            (function() {{
+              var wid = '{widget_id}', zone = {zone_js}, state = 'paused';
+              function $(s){{ return document.getElementById(wid + s); }}
+              function setErr(m){{ $('-error').textContent = m || ''; }}
+              function poll() {{
+                fetch('/api/soundtrack/now-playing?zone=' + encodeURIComponent(zone))
+                  .then(function(r){{ return r.json(); }})
+                  .then(function(d){{
+                    if (!d.success) {{ setErr(d.error || 'Error'); return; }}
+                    setErr('');
+                    $('-zone').textContent = d.zone_name || '';
+                    $('-track').textContent = d.track || 'Nothing playing';
+                    $('-artist').textContent = d.artist || '';
+                    state = d.state || 'paused';
+                    $('-playpause').textContent = (String(state).toLowerCase() === 'playing') ? '⏸️' : '▶️';
+                    if (d.album_art) {{ $('-art').src = d.album_art; $('-art').style.display = 'inline-block'; }}
+                    else {{ $('-art').style.display = 'none'; }}
+                    if (d.volume != null && document.activeElement !== $('-vol')) $('-vol').value = d.volume;
+                  }})
+                  .catch(function(){{ setErr('Network error'); }});
+              }}
+              function ctrl(action, value) {{
+                fetch('/api/soundtrack/control', {{
+                  method: 'POST', headers: {{'Content-Type': 'application/json'}},
+                  body: JSON.stringify({{action: action, zone: zone, value: value}})
+                }}).then(function(r){{ return r.json(); }})
+                  .then(function(d){{ if (!d.success) setErr(d.error || 'Control failed'); else setTimeout(poll, 600); }})
+                  .catch(function(){{ setErr('Control failed'); }});
+              }}
+              $('-playpause').onclick = function(){{ ctrl(String(state).toLowerCase() === 'playing' ? 'pause' : 'play'); }};
+              $('-skip').onclick = function(){{ ctrl('skip'); }};
+              $('-vol').onchange = function(){{ ctrl('volume', parseInt(this.value, 10)); }};
+              poll();
+              setInterval(poll, 10000);
+            }})();
+            </script>
+            '''
     else:  # text/html
         # For text type, allow HTML
         inner = f'<div class="widget-text">{content}</div>'
@@ -7391,6 +7551,45 @@ def render_admin_page(user, config, message=None, error=None):
             </form>
         </div>
     </div>
+
+    <div class="admin-section">
+        <h3>🎵 Soundtrack Your Brand</h3>
+        <div class="admin-content">
+            <p style="color:var(--text-secondary);font-size:0.9rem;margin-bottom:1rem;">Connect to Soundtrack Your Brand to control music zones from dashboard widgets. The API token is stored on this device only and is never sent to the browser.</p>
+            <form method="POST" action="/admin/settings/soundtrack">
+                <div class="toggle-row" style="padding:1rem;background:var(--bg-primary);border-radius:var(--radius);margin-bottom:1rem;">
+                    <div>
+                        <label style="margin-bottom:0;">Enable Soundtrack</label>
+                        <small style="display:block;color:var(--text-secondary);margin-top:0.25rem;">Status: {'✅ API token configured' if config.get('soundtrack', {}).get('api_token') else '⚠️ Not configured'}</small>
+                    </div>
+                    <select name="soundtrack_enabled" style="width:auto;">
+                        <option value="0" {"selected" if not config.get('soundtrack', {}).get('enabled', False) else ""}>Off</option>
+                        <option value="1" {"selected" if config.get('soundtrack', {}).get('enabled', False) else ""}>On</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin-bottom:1rem;">
+                    <label>API Token</label>
+                    <input type="password" name="soundtrack_api_token" value="" placeholder="{'•••••••• (leave blank to keep current token)' if config.get('soundtrack', {}).get('api_token') else 'Paste your Soundtrack API token'}" autocomplete="new-password" style="font-family:monospace;">
+                    <small style="color:var(--text-secondary);display:block;margin-top:0.25rem;">Base64 token from your Soundtrack account. Stored server-side only. Leave blank to keep the existing token.</small>
+                </div>
+                <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                    <button type="submit">Save Soundtrack Settings</button>
+                    <button type="button" class="btn btn-secondary" onclick="testSoundtrack(this)">Test Connection</button>
+                    <span id="soundtrack-test-result" style="font-size:0.85rem;"></span>
+                </div>
+            </form>
+            <script>
+            function testSoundtrack(btn) {{
+                var out = document.getElementById('soundtrack-test-result');
+                out.textContent = 'Testing...'; out.style.color = 'var(--text-secondary)';
+                fetch('/api/soundtrack/zones').then(function(r){{ return r.json(); }}).then(function(d){{
+                    if (d.success) {{ out.textContent = '✅ Connected (' + (d.zones ? d.zones.length : 0) + ' zones)'; out.style.color = '#22c55e'; }}
+                    else {{ out.textContent = '⚠️ ' + (d.error || 'Failed'); out.style.color = '#ef4444'; }}
+                }}).catch(function(){{ out.textContent = '⚠️ Request failed'; out.style.color = '#ef4444'; }});
+            }}
+            </script>
+        </div>
+    </div>
     </div>
 
     <!-- Watchdog Panel -->
@@ -7423,7 +7622,8 @@ def render_widgets_section(config):
         'weather': {'icon': '🌤️', 'name': 'Weather'},
         'countdown': {'icon': '⏳', 'name': 'Countdown'},
         'notes': {'icon': '📋', 'name': 'Notes'},
-        'buttons': {'icon': '🔘', 'name': 'Command Buttons'}
+        'buttons': {'icon': '🔘', 'name': 'Command Buttons'},
+        'soundtrack': {'icon': '🎵', 'name': 'Soundtrack'}
     }
     
     for i, widget in enumerate(widgets):
@@ -7514,6 +7714,7 @@ def render_widgets_section(config):
                             <option value="countdown" {'selected' if wtype == 'countdown' else ''}>⏳ Countdown</option>
                             <option value="notes" {'selected' if wtype == 'notes' else ''}>📋 Notes</option>
                             <option value="buttons" {'selected' if wtype == 'buttons' else ''}>🔘 Command Buttons</option>
+                            <option value="soundtrack" {'selected' if wtype == 'soundtrack' else ''}>🎵 Soundtrack</option>
                         </select>
                     </div>
                     <div class="form-group"><label>Size</label>
@@ -7535,8 +7736,9 @@ def render_widgets_section(config):
                 <div id="edit-regular-{i}" class="form-group" style="margin-bottom:1rem;{'display:none;' if wtype == 'buttons' else ''}">
                     <label>Content / Settings</label>
                     <textarea id="edit-textarea-{i}" rows="3" placeholder="Widget content">{escape_html(wcontent) if wtype != 'buttons' else ''}</textarea>
+                    <button type="button" id="edit-soundtrack-zones-btn-{i}" class="btn btn-secondary btn-sm" style="{'margin-top:0.5rem;' if wtype == 'soundtrack' else 'display:none;margin-top:0.5rem;'}" onclick="loadSoundtrackZones('edit-textarea-{i}', this)">🎵 Load zones</button>
                     <small style="color:var(--text-secondary);display:block;margin-top:0.25rem;">
-                        Clock: 12h/24h | Text: HTML | Image: URL | Weather: city,C or city,F | Countdown: YYYY-MM-DD HH:MM
+                        Clock: 12h/24h | Text: HTML | Image: URL | Weather: city,C or city,F | Countdown: YYYY-MM-DD HH:MM | Soundtrack: sound zone ID
                     </small>
                 </div>
                 
@@ -7615,6 +7817,7 @@ def render_widgets_section(config):
                             <option value="countdown">⏳ Countdown</option>
                             <option value="notes">📋 Notes</option>
                             <option value="buttons">🔘 Command Buttons</option>
+                            <option value="soundtrack">🎵 Soundtrack</option>
                         </select>
                     </div>
                     <div class="form-group"><label>Size</label>
@@ -7630,6 +7833,7 @@ def render_widgets_section(config):
                 <div id="add-regular-content" class="form-group" style="margin-bottom:1rem;">
                     <label>Content / Settings</label>
                     <textarea id="add-content-textarea" rows="2" placeholder="Widget content or settings"></textarea>
+                    <button type="button" id="add-soundtrack-zones-btn" class="btn btn-secondary btn-sm" style="display:none;margin-top:0.5rem;" onclick="loadSoundtrackZones('add-content-textarea', this)">🎵 Load zones</button>
                     <small id="widget-help" style="color:var(--text-secondary);display:block;margin-top:0.25rem;">
                         Clock: Use "12h" or "24h" for time format
                     </small>
@@ -7673,7 +7877,7 @@ def render_widgets_section(config):
                 }} else {{
                     regularContent.style.display = 'block';
                     buttonsBuilder.style.display = 'none';
-                    
+
                     var hints = {{
                         'clock': 'Use "12h" or "24h" for time format',
                         'date': 'Use "full" for full date display',
@@ -7681,17 +7885,20 @@ def render_widgets_section(config):
                         'image': 'Enter image URL',
                         'weather': 'City name or lat,lon. Add ",C" for Celsius or ",F" for Fahrenheit. Examples: "London,C" or "40.7,-74.0,F"',
                         'countdown': 'Enter target: YYYY-MM-DD HH:MM',
-                        'notes': 'Enter note text'
+                        'notes': 'Enter note text',
+                        'soundtrack': 'Enter the Soundtrack sound zone ID, or click "Load zones" to pick one'
                     }};
                     helpText.textContent = hints[type] || 'Enter content';
                 }}
+                var stBtn = document.getElementById('add-soundtrack-zones-btn');
+                if (stBtn) stBtn.style.display = (type === 'soundtrack') ? 'inline-block' : 'none';
             }}
-            
+
             function toggleEditContentType(select, index) {{
                 var type = select.value;
                 var regularContent = document.getElementById('edit-regular-' + index);
                 var buttonsBuilder = document.getElementById('edit-buttons-' + index);
-                
+
                 if (type === 'buttons') {{
                     regularContent.style.display = 'none';
                     buttonsBuilder.style.display = 'block';
@@ -7699,6 +7906,37 @@ def render_widgets_section(config):
                     regularContent.style.display = 'block';
                     buttonsBuilder.style.display = 'none';
                 }}
+                var stBtn = document.getElementById('edit-soundtrack-zones-btn-' + index);
+                if (stBtn) stBtn.style.display = (type === 'soundtrack') ? 'inline-block' : 'none';
+            }}
+
+            function loadSoundtrackZones(targetTextareaId, btn) {{
+                var ta = document.getElementById(targetTextareaId);
+                if (!ta) return;
+                var orig = btn ? btn.textContent : '';
+                if (btn) {{ btn.disabled = true; btn.textContent = 'Loading...'; }}
+                fetch('/api/soundtrack/zones').then(function(r){{ return r.json(); }}).then(function(d){{
+                    if (btn) {{ btn.disabled = false; btn.textContent = orig; }}
+                    if (!d.success) {{ alert('Soundtrack: ' + (d.error || 'failed to load zones')); return; }}
+                    if (!d.zones || !d.zones.length) {{ alert('No sound zones found for this account.'); return; }}
+                    var existing = ta.parentNode.querySelector('.st-zone-select');
+                    if (existing) existing.remove();
+                    var sel = document.createElement('select');
+                    sel.className = 'st-zone-select';
+                    sel.style.marginTop = '0.5rem';
+                    var opts = '<option value="">-- select a sound zone --</option>';
+                    d.zones.forEach(function(z){{
+                        var label = (z.account ? z.account + ' — ' : '') + (z.name || z.id);
+                        var selAttr = (z.id === ta.value) ? ' selected' : '';
+                        opts += '<option value="' + z.id + '"' + selAttr + '>' + label + '</option>';
+                    }});
+                    sel.innerHTML = opts;
+                    sel.onchange = function(){{ if (this.value) ta.value = this.value; }};
+                    ta.parentNode.insertBefore(sel, ta.nextSibling);
+                }}).catch(function(){{
+                    if (btn) {{ btn.disabled = false; btn.textContent = orig; }}
+                    alert('Soundtrack: request failed');
+                }});
             }}
             
             function addButton(listId) {{
@@ -9531,6 +9769,9 @@ def render_system_section(config):
     safe_config = json.loads(json.dumps(config))
     for u in safe_config.get('users', {}): safe_config['users'][u]['password_hash'] = '***'
     if 'sessions' in safe_config: safe_config['sessions'] = {}
+    # Redact secrets that must never reach the browser in the inline view.
+    if safe_config.get('cloud', {}).get('device_key'): safe_config['cloud']['device_key'] = '***'
+    if safe_config.get('soundtrack', {}).get('api_token'): safe_config['soundtrack']['api_token'] = '***'
     config_json = json.dumps(safe_config, indent=2)
     
     return f'''
@@ -10021,6 +10262,71 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     'message': 'Not running on Raspberry Pi'
                 })
         
+        elif path == '/api/soundtrack/zones':
+            # List sound zones for the widget editor (admin only)
+            if not user:
+                self.send_json({'success': False, 'error': 'Authentication required'}, 401)
+                return
+            if not config["users"].get(user, {}).get("is_admin"):
+                self.send_json({'success': False, 'error': 'Admin required'}, 403)
+                return
+            enabled, token = get_soundtrack_config(config)
+            if not enabled or not token:
+                self.send_json({'success': False, 'error': 'Soundtrack not configured'})
+                return
+            ok, result = soundtrack_graphql(token, SOUNDTRACK_ZONES_QUERY)
+            if not ok:
+                self.send_json({'success': False, 'error': result.get('error', 'Request failed')})
+                return
+            zones = []
+            for acc_edge in ((result.get('me') or {}).get('accounts', {}).get('edges') or []):
+                acc = acc_edge.get('node', {})
+                acct_name = acc.get('businessName', 'Account')
+                for z_edge in ((acc.get('soundZones') or {}).get('edges') or []):
+                    z = z_edge.get('node', {})
+                    if z.get('id'):
+                        zones.append({'id': z.get('id'), 'name': z.get('name', ''), 'account': acct_name})
+            self.send_json({'success': True, 'zones': zones})
+
+        elif path == '/api/soundtrack/now-playing':
+            # Now-playing + playback state for one zone (any logged-in user)
+            if not user:
+                self.send_json({'success': False, 'error': 'Authentication required'}, 401)
+                return
+            qs = parse_qs(self.path.split('?', 1)[1]) if '?' in self.path else {}
+            zone = (qs.get('zone', [''])[0]).strip()
+            enabled, token = get_soundtrack_config(config)
+            if not enabled or not token:
+                self.send_json({'success': False, 'error': 'Soundtrack not configured'})
+                return
+            if not zone:
+                self.send_json({'success': False, 'error': 'zone required'})
+                return
+            now = time_module.time()
+            cached = _soundtrack_cache.get(zone)
+            if cached and (now - cached[0]) < SOUNDTRACK_CACHE_TTL:
+                self.send_json(cached[1])
+                return
+            ok, result = soundtrack_graphql(token, SOUNDTRACK_NOWPLAYING_QUERY, {'zone': zone})
+            if not ok:
+                self.send_json({'success': False, 'error': result.get('error', 'Request failed')})
+                return
+            sz = result.get('soundZone') or {}
+            track = (sz.get('nowPlaying') or {}).get('track') or {}
+            artists = ', '.join(a.get('name', '') for a in (track.get('artists') or []) if a.get('name'))
+            playback = sz.get('playback') or {}
+            payload = {
+                'success': True,
+                'zone_name': sz.get('name', ''),
+                'state': playback.get('state', ''),
+                'volume': playback.get('volume'),
+                'track': track.get('name', ''),
+                'artist': artists,
+                'album_art': ((track.get('album') or {}).get('image') or {}).get('url', ''),
+            }
+            _soundtrack_cache[zone] = (now, payload)
+            self.send_json(payload)
+
         elif path.startswith('/proxy/'):
             # Reverse proxy for local iframe URLs - avoids mixed content when accessing remotely
             if not user:
@@ -10375,6 +10681,46 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 server_logger.error(f"Connectivity report error: {str(e)}")
                 self.send_json({'success': False, 'error': str(e)})
+
+        elif path == '/api/soundtrack/control':
+            # Playback control for a Soundtrack zone (requires login)
+            if not user:
+                self.send_json({'success': False, 'error': 'Authentication required'}, 401)
+                return
+            if not data.get('_is_json'):
+                self.send_json({'success': False, 'error': 'JSON body required'})
+                return
+            try:
+                body = json.loads(data.get('_json_body', '{}'))
+            except json.JSONDecodeError:
+                self.send_json({'success': False, 'error': 'Invalid JSON'})
+                return
+            action = body.get('action', '')
+            zone = (body.get('zone') or '').strip()
+            enabled, token = get_soundtrack_config(config)
+            if not enabled or not token:
+                self.send_json({'success': False, 'error': 'Soundtrack not configured'})
+                return
+            if not zone:
+                self.send_json({'success': False, 'error': 'zone required'})
+                return
+            if action not in SOUNDTRACK_MUTATIONS:
+                self.send_json({'success': False, 'error': 'Invalid action'})
+                return
+            variables = {'zone': zone}
+            if action == 'volume':
+                try:
+                    variables['v'] = max(0, min(16, int(body.get('value', 0))))
+                except (ValueError, TypeError):
+                    self.send_json({'success': False, 'error': 'Invalid volume'})
+                    return
+            ok, result = soundtrack_graphql(token, SOUNDTRACK_MUTATIONS[action], variables)
+            _soundtrack_cache.pop(zone, None)  # force a fresh poll next time
+            if ok:
+                server_logger.info(f"Soundtrack {action} on zone {zone}", extra=user)
+                self.send_json({'success': True})
+            else:
+                self.send_json({'success': False, 'error': result.get('error', 'Control failed')})
 
         elif not user:
             self.redirect('/login')
@@ -10918,6 +11264,15 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 cloud_agent.stop()
                 cloud_agent.enabled = False
                 self.send_html(render_admin_page(user, config, message="Cloud settings saved"))
+
+        elif path == '/admin/settings/soundtrack':
+            enabled = data.get('soundtrack_enabled') == '1'
+            token = data.get('soundtrack_api_token', '').strip()
+            apply_soundtrack_settings(config, enabled, token)
+            save_config(config)
+            # Invalidate cached now-playing so re-config takes effect immediately.
+            _soundtrack_cache.clear()
+            self.send_html(render_admin_page(user, config, message="Soundtrack settings saved"))
 
         elif path == '/admin/widget/add':
             name = data.get('name', '').strip()

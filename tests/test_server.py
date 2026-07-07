@@ -273,6 +273,15 @@ class ServerIntegrationTests(unittest.TestCase):
     def test_static_unknown_asset_404(self):
         self.assertEqual(self._get("/static/does-not-exist").status, 404)
 
+    def test_healthz_public(self):
+        import json
+        resp = self._get("/healthz")
+        self.assertEqual(resp.status, 200)
+        data = json.loads(resp.read())
+        self.assertEqual(data.get("status"), "ok")
+        self.assertTrue(data.get("version"))
+        self.assertIn("uptime_seconds", data)
+
     def test_response_gzipped_when_accepted(self):
         import gzip as _gzip
         login = self._post_form("/login", {"username": "admin", "password": "admin123"})

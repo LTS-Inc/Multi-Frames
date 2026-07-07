@@ -36,3 +36,10 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime artifacts (never commit — these are created at runtime)
+multi_frames_config.json
+multi_frames_config.json.tmp
+.mfcfg-*
+multi_frames_assets/
+multi_frames_audit.log*

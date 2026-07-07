@@ -5,6 +5,24 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-07-07
+
+Platform release: schema migrations, external image storage, audit logging, a
+health endpoint, and removal of the dead modular package. Fully backward
+compatible — existing configs migrate automatically on first load.
+
+### Added
+- **Config schema versioning + migration runner.** `config["schema_version"]` and an ordered `_migrate_config()` runner applied in `load_config()`. Migrations are idempotent-safe and persisted once. Current migrations: v1 backfills stable iframe/widget IDs (folds in the old `_ensure_ids`), v2 externalizes branding images (below).
+- **Branding/background images moved out of the config JSON.** Logo, favicon, Apple/Android icons, and the background image are now stored as files under `multi_frames_assets/` (next to the config) and referenced by filename + mime, instead of being base64-embedded in the JSON. A one-time migration converts existing inline images to files on upgrade; legacy inline base64 still serves as a fallback. This shrinks the config dramatically and cuts memory use.
+- **Optional audit logging to disk.** Set `MF_AUDIT_LOG=/path/to/file` (optional `MF_AUDIT_MAX_BYTES`, default 1 MB) to record security-relevant events — login success/failure/lockout, logout, user add/delete, password and permission changes, network commands, and server start — as one JSON object per line, with size-based rotation (keeps 3 backups) and `0600` permissions. Disabled unless the env var is set.
+- **Health/readiness endpoint.** `GET /healthz` (and `/api/health`) returns `{status, version, uptime_seconds}` as unauthenticated JSON for kiosk-fleet monitoring and load balancers. Exposes no sensitive data.
+
+### Removed
+- **The non-runnable `multi_frames/` modular package.** `python -m multi_frames` never worked (missing `.server`, empty `handlers/`, `templates/__init__.py` importing files that don't exist), and its `build.py` produced an incomplete `dist/` build that was never the real artifact. The single-file `multi_frames.py` is the authoritative, hand-maintained source; the dead scaffolding is gone. Also stopped tracking the runtime `multi_frames_config.json` (now gitignored).
+
+### Notes
+- No action required on upgrade. The first `load_config()` after updating stamps `schema_version`, backfills any missing IDs, and moves inline images to `multi_frames_assets/`. Keep that directory alongside your config (and out of version control — it's gitignored).
+
 ## [1.6.1] - 2026-07-07
 
 Performance release. Behavior is unchanged; responses are smaller and faster.

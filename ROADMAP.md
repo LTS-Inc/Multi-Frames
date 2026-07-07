@@ -222,15 +222,14 @@ Full read-modify-write atomicity of the server `config` across concurrent handle
 - ✅ Serve logo/favicon/icons/background from `/static/<name>` with `Cache-Control` + `ETag`/304 and versioned URLs. (Moving the base64 images *out of the config JSON* entirely remains a Phase 4 item — this release stops re-embedding them into every response.)
 - ⏳ Not yet done: proxy connection reuse; shorter/configurable Soundtrack upstream timeout (low impact — deferred).
 
-### Phase 4 — New features & platform
-Higher-value additions once the base is solid:
-- **Finish or delete the modular package.** `python -m multi_frames` still can't run (missing `.server`, empty `handlers/`, template imports for files that don't exist). Either land the refactor or remove the dead scaffolding so the single-file distribution is the honest source of truth.
-- **Drag-and-drop reordering** — make the advertised feature real (or correct the docs).
-- **Real-time widget updates** over Server-Sent Events instead of per-widget polling (helps the Soundtrack thread-exhaustion risk, N-6).
-- **Audit logging to disk** with rotation (currently in-memory deque only) — needed for the tunnel/command features to be auditable.
-- **Config schema versioning + migrations** so upgrades that add fields (ids, permissions, fallback) are explicit and testable.
-- **Widget marketplace / template library** built on the existing cloud widget-template plumbing.
-- **Health/readiness endpoint** and Prometheus-style metrics for kiosk fleets.
+### Phase 4 — New features & platform — ✅ selected items DONE (v1.7.0)
+- ✅ **Deleted the dead modular package.** `python -m multi_frames` was non-runnable scaffolding; removed so the single file is the honest source of truth. (Chose delete over finishing the refactor.)
+- ✅ **Audit logging to disk** with size rotation, opt-in via `MF_AUDIT_LOG` (login/user-mgmt/command/tunnel/server events as JSONL).
+- ✅ **Config schema versioning + migration runner** (`schema_version` + `_migrate_config`); ID backfill and image externalization are now migrations.
+- ✅ **Moved branding images out of the config JSON** into `multi_frames_assets/` (migration v2), with a legacy base64 fallback.
+- ✅ **Health/readiness endpoint** (`/healthz`, `/api/health`).
+- ⏹️ **Drag-and-drop reordering** — deliberately NOT added; ▲/▼ move buttons kept (product decision). Docs corrected in v1.5.1.
+- ⏳ Not done (future): SSE real-time widget updates; widget marketplace/template library; Prometheus-style metrics.
 
 ### Testing to add alongside
 - Regression tests for U-1 (permission-filtered proxy index), N-1 (send-command host restriction), N-4 (tunnel admin selection), C-1 (worker signature verification), U-5 (log tab ordering), U-6 (notes newlines).

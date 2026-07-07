@@ -165,6 +165,56 @@ class ConfigRoundTripTests(_MFTestBase):
         self.assertEqual(self.mf.load_config().get("sentinel_cache"), "v2")
 
 
+class SchemaMigrationTests(_MFTestBase):
+    def test_migrate_stamps_version_and_backfills_ids(self):
+        cfg = {"iframes": [{"name": "a"}], "widgets": [{"name": "w"}]}
+        changed = self.mf._migrate_config(cfg)
+        self.assertTrue(changed)
+        self.assertEqual(cfg["schema_version"], self.mf.CONFIG_SCHEMA_VERSION)
+        self.assertTrue(cfg["iframes"][0].get("id"))
+
+    def test_migrate_externalizes_base64_logo(self):
+        import base64
+        png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"z" * 40).decode()
+        cfg = {"branding": {"logo": png, "logo_mime": "image/png"}}
+        self.mf._migrate_config(cfg)
+        # Base64 removed; file reference set; file exists on disk.
+        self.assertNotIn("logo", cfg["branding"])
+        fname = cfg["branding"].get("logo_file")
+        self.assertTrue(fname)
+        path = os.path.join(self.mf._assets_dir(), fname)
+        self.assertTrue(os.path.exists(path))
+
+    def test_migrate_is_noop_when_current(self):
+        cfg = {"schema_version": self.mf.CONFIG_SCHEMA_VERSION,
+               "iframes": [{"name": "a", "id": "abcd1234"}], "widgets": []}
+        self.assertFalse(self.mf._migrate_config(cfg))
+
+
+class AuditLoggerTests(_MFTestBase):
+    def test_disabled_by_default_no_write(self):
+        al = self.mf.AuditLogger()
+        self.assertFalse(al.enabled())
+        al.log("noop_event", x=1)  # must not raise with no path
+
+    def test_writes_jsonl_and_rotates(self):
+        import json
+        path = os.path.join(self.tmpdir, "audit.log")
+        al = self.mf.AuditLogger(path=path, max_bytes=200, backups=2)
+        self.assertTrue(al.enabled())
+        for i in range(20):
+            al.log("login_success", username=f"user{i}", ip="127.0.0.1")
+        # Current log parses as JSON lines.
+        with open(path) as f:
+            lines = [ln for ln in f.read().splitlines() if ln.strip()]
+        self.assertTrue(lines)
+        rec = json.loads(lines[-1])
+        self.assertEqual(rec["event"], "login_success")
+        self.assertIn("ts", rec)
+        # Rotation produced at least one backup.
+        self.assertTrue(os.path.exists(path + ".1"))
+
+
 class SessionTests(_MFTestBase):
     def setUp(self):
         self.mf.sessions.clear()

@@ -7,7 +7,7 @@ This document provides context for AI assistants working on the Multi-Frames cod
 **Multi-Frames** is a zero-dependency Python web server for displaying configurable iFrames and dashboard widgets. Designed for home dashboards, kiosks, digital signage, and Raspberry Pi deployments.
 
 - **Author**: Marco Longoria, LTS, Inc.
-- **Version**: 1.6.1
+- **Version**: 1.7.0
 - **License**: MIT
 - **Python**: 3.6+
 
@@ -19,9 +19,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system architecture.
 
 | Component | Location | Description |
 |-----------|----------|-------------|
-| Main Server | `multi_frames.py` | Single-file distribution (~10k lines) |
-| Modular Source | `multi_frames/` | Package with separated modules |
+| Main Server | `multi_frames.py` | Single-file distribution (~12.9k lines) — the authoritative, hand-maintained source |
 | Cloud Backend | `cloud/worker.js` | Cloudflare Worker for remote management |
+
+> The old `multi_frames/` modular package was removed in v1.7.0 — it was
+> non-runnable scaffolding (`python -m multi_frames` never worked) and the
+> single file is the only production artifact.
 
 ### Technology Stack
 
@@ -34,25 +37,16 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system architecture.
 
 ```
 Multi-Frames/
-├── multi_frames.py          # Single-file distribution (main)
-├── multi_frames/            # Modular package source
-│   ├── __init__.py          # Version, metadata
-│   ├── __main__.py          # Entry point
-│   ├── config.py            # Configuration management
-│   ├── auth.py              # Authentication
-│   ├── logger.py            # Logging
-│   ├── cli.py               # Terminal UI
-│   ├── build.py             # Build script
-│   ├── network/             # Network utilities
-│   ├── utils/               # Helper functions
-│   ├── templates/           # HTML templates (TODO)
-│   └── handlers/            # HTTP handlers (TODO)
+├── multi_frames.py          # Single-file distribution (the whole server)
+├── multi_frames_assets/     # Branding/background image files (runtime, gitignored)
 ├── cloud/                   # Cloud management
 │   ├── worker.js            # Cloudflare Worker
 │   ├── wrangler.toml.example
 │   └── README.md
+├── tests/                   # Zero-dependency stdlib test suite
 ├── ARCHITECTURE.md          # System architecture docs
 ├── CODEBASE.md              # Detailed code documentation
+├── ROADMAP.md               # Review findings + phased roadmap
 ├── CHANGELOG.md             # Version history
 └── README.md                # User documentation
 ```
@@ -62,7 +56,7 @@ Multi-Frames/
 ### Code Style
 
 - **No external dependencies** - Use only Python standard library
-- **Single-file deployable** - Build combines modules into one file
+- **Single-file server** - `multi_frames.py` is edited directly (not generated)
 - **Embedded HTML/CSS/JS** - All frontend code in Python strings
 - **Type hints** - Use where practical
 - **Docstrings** - Document public functions
@@ -70,8 +64,7 @@ Multi-Frames/
 ### Common Patterns
 
 ```python
-# HTML escaping (always escape user input)
-from multi_frames.utils.html import escape_html
+# HTML escaping (always escape user input); escape_js_string() for inline JS
 safe_text = escape_html(user_input)
 
 # Configuration access
@@ -97,24 +90,16 @@ iframes, widgets = filter_by_permissions(
 )
 ```
 
-### Building
-
-```bash
-# Build single-file distribution
-python multi_frames/build.py
-
-# Output: dist/multi_frames.py
-```
-
 ### Running
 
 ```bash
-# From single file
 python multi_frames.py --port 8080
 
-# From package
-python -m multi_frames --port 8080
+# Optional: enable disk audit logging (JSONL, size-rotated)
+MF_AUDIT_LOG=/var/log/multi_frames_audit.log python multi_frames.py --port 8080
 ```
+
+There is no build step — `multi_frames.py` is the source and the deliverable.
 
 ## Key Features to Understand
 
@@ -138,7 +123,10 @@ python -m multi_frames --port 8080
 - Password hashing — PBKDF2-HMAC-SHA256 with a per-hash random salt (`hash_password`/`verify_password`), 600k iterations. Legacy bare-SHA-256 hashes still verify and are transparently migrated to PBKDF2 on next successful login.
 - CSRF — session cookie is `SameSite=Strict`; state-changing POSTs additionally reject a mismatched `Origin`/`Referer` (`_csrf_ok`). Tunnel-forwarded requests are exempt.
 - Security headers — `send_html` sets `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options: SAMEORIGIN` (omitted for tunnel-forwarded pages), and a permissive `Content-Security-Policy`.
-- Config file is written atomically (temp + `os.replace`) with `0600` permissions; shared in-memory state (`sessions`, `failed_login_attempts`, `_soundtrack_cache`, config writes) is lock-guarded, and a background thread sweeps expired sessions/lockouts.
+- Config file is written atomically (temp + `os.replace`) with `0600` permissions; shared in-memory state (`sessions`, `failed_login_attempts`, `_soundtrack_cache`, config writes) is lock-guarded, and a background thread sweeps expired sessions/lockouts. `load_config()` caches the parsed config keyed on the file `(mtime, size)` and returns deep copies.
+- **Config schema versioning** — `config["schema_version"]` + an ordered migration runner (`_migrate_config`) applied in `load_config()`. Migrations so far: v1 backfills iframe/widget IDs; v2 externalizes branding images. Add new migrations by appending to `_CONFIG_MIGRATIONS` and bumping `CONFIG_SCHEMA_VERSION`.
+- **Branding images live as files** (schema v2) under `multi_frames_assets/` (next to the config), referenced from config as `<key>_file` + mime and served from `/static/<name>`. Legacy inline base64 still verifies and is migrated to a file on load. Use `set_branding_asset`/`clear_branding_asset`/`read_branding_asset`/`branding_asset_url`.
+- **Optional audit log** — set `MF_AUDIT_LOG=/path` (and optional `MF_AUDIT_MAX_BYTES`) to write security events (login success/failure/lockout, logout, user add/delete, password/permission changes, commands, tunnel/server start) as size-rotated JSONL via the `audit_logger` singleton.
 - Rate limiting on login
 - **Per-user allow-lists**: each user record may carry optional
   `allowed_iframes` / `allowed_widgets` fields (lists of stable IDs).
@@ -176,6 +164,8 @@ python -m multi_frames --port 8080
 | `/` | GET | Main dashboard |
 | `/login` | GET/POST | User login |
 | `/logout` | GET | User logout |
+| `/healthz`, `/api/health` | GET | Health/readiness JSON (status, version, uptime) — no auth, no sensitive data |
+| `/static/<name>` | GET | Cacheable branding assets (logo, favicon, icons, background) with `ETag`/`Cache-Control` |
 
 ### Authenticated
 | Endpoint | Method | Description |
@@ -294,4 +284,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.6.1** (2026-07-07)
+Current: **v1.7.0** (2026-07-07)

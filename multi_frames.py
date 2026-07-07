@@ -295,7 +295,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.6.1"
+VERSION = "1.7.0"
 VERSION_DATE = "2026-07-07"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -321,6 +321,7 @@ import ipaddress
 import base64
 import gzip
 import socket
+import threading as _threading
 import urllib.request
 import urllib.error
 from urllib.parse import parse_qs, urlparse
@@ -420,6 +421,68 @@ class ServerLogger:
 
 # Global logger instance
 server_logger = ServerLogger()
+
+
+class AuditLogger:
+    """Optional append-only audit log for security-relevant events (logins,
+    user management, commands, tunnels), written as one JSON object per line
+    with size-based rotation. Disabled unless a path is configured
+    (env MF_AUDIT_LOG, or main() enables it). Thread-safe."""
+
+    def __init__(self, path=None, max_bytes=1_000_000, backups=3):
+        self.path = path or None
+        self.max_bytes = max_bytes
+        self.backups = backups
+        self._lock = _threading.Lock()
+
+    def configure(self, path, max_bytes=None, backups=None):
+        with self._lock:
+            self.path = path or None
+            if max_bytes:
+                self.max_bytes = max_bytes
+            if backups is not None:
+                self.backups = backups
+
+    def enabled(self):
+        return bool(self.path)
+
+    def log(self, event, **fields):
+        if not self.path:
+            return
+        record = {'ts': datetime.now().isoformat(timespec='seconds'), 'event': event}
+        record.update(fields)
+        line = json.dumps(record, default=str) + '\n'
+        with self._lock:
+            try:
+                self._rotate_if_needed(len(line.encode('utf-8')))
+                with open(self.path, 'a', encoding='utf-8') as f:
+                    f.write(line)
+                try:
+                    os.chmod(self.path, 0o600)
+                except OSError:
+                    pass
+            except OSError as e:
+                server_logger.debug(f"Audit log write failed: {e}")
+
+    def _rotate_if_needed(self, incoming):
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            return
+        if size + incoming <= self.max_bytes:
+            return
+        # Shift path.(n-1) -> path.n, then path -> path.1
+        for i in range(self.backups, 0, -1):
+            src = self.path if i == 1 else f"{self.path}.{i - 1}"
+            dst = f"{self.path}.{i}"
+            if os.path.exists(src):
+                try:
+                    os.replace(src, dst)
+                except OSError:
+                    pass
+
+
+audit_logger = AuditLogger()
 
 # =============================================================================
 # Server Alert System
@@ -3002,8 +3065,8 @@ def apply_network_config(config, network_settings):
         return apply_network_linux(interface, mode, ip_addr, subnet, gateway, dns_primary, dns_secondary)
 
 # In-memory session storage. The server is threaded (ThreadingMixIn), so all
-# access to these shared dicts is guarded by module-level locks.
-import threading as _threading
+# access to these shared dicts is guarded by module-level locks (_threading
+# is imported at the top of the module).
 sessions = {}
 _sessions_lock = _threading.Lock()
 
@@ -3110,7 +3173,7 @@ def load_config():
             cfg = json.loads(json.dumps(DEFAULT_CONFIG))
             need_save = True
 
-        if _ensure_ids(cfg):
+        if _migrate_config(cfg):
             need_save = True
 
         if not need_save:
@@ -3576,38 +3639,193 @@ def escape_js_string(text):
             .replace("\r", "\\r")
             .replace("</", "<\\/"))
 
-# Branding/background images are stored base64 in config. Rather than inline
-# them (often multiple MB) into every HTML/CSS response, they are served once
-# from /static/<name> with long-lived caching, and referenced by URL.
+# Branding/background images live as files in the assets directory (moved out
+# of the config JSON as of schema v2). Config stores a filename reference
+# (<key>_file) + mime; the image is served once from /static/<name> with
+# long-lived caching. Legacy configs may still carry inline base64 under the
+# bare key — that path keeps working and is migrated to a file on load.
 _BRANDING_ASSETS = {
-    # name -> (config section, data key, mime key)
-    'logo':             ('branding', 'logo', 'logo_mime'),
-    'favicon':          ('branding', 'favicon', 'favicon_mime'),
-    'apple-touch-icon': ('branding', 'apple_touch_icon', 'apple_touch_icon_mime'),
-    'android-icon':     ('branding', 'android_icon', 'android_icon_mime'),
-    'background':       ('background', 'image', 'image_mime'),
+    # name -> (config section, legacy base64 key, file key, mime key)
+    'logo':             ('branding', 'logo', 'logo_file', 'logo_mime'),
+    'favicon':          ('branding', 'favicon', 'favicon_file', 'favicon_mime'),
+    'apple-touch-icon': ('branding', 'apple_touch_icon', 'apple_touch_icon_file', 'apple_touch_icon_mime'),
+    'android-icon':     ('branding', 'android_icon', 'android_icon_file', 'android_icon_mime'),
+    'background':       ('background', 'image', 'image_file', 'image_mime'),
 }
 
-def get_branding_asset(config, name):
-    """Return (base64_data, mime) for a named branding asset, or (None, None)."""
+_MIME_EXT = {
+    'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg',
+    'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/webp': 'webp',
+    'image/x-icon': 'ico', 'image/vnd.microsoft.icon': 'ico', 'image/ico': 'ico',
+}
+
+def _assets_dir():
+    base = os.path.dirname(os.path.abspath(CONFIG_FILE)) or '.'
+    return os.path.join(base, 'multi_frames_assets')
+
+def _asset_src(config, section, create=False):
+    """Return the config sub-dict holding a section's asset keys."""
+    if section == 'branding':
+        return config.setdefault('branding', {}) if create else (config.get('branding', {}) or {})
+    if create:
+        return config.setdefault('appearance', {}).setdefault('background', {})
+    return (config.get('appearance', {}) or {}).get('background', {}) or {}
+
+def _write_asset_file(name, data_bytes, mime):
+    """Write asset bytes to the assets dir as <name>-<hash>.<ext>; return the
+    basename, or None on failure."""
+    try:
+        os.makedirs(_assets_dir(), exist_ok=True)
+        h = hashlib.sha256(data_bytes).hexdigest()[:12]
+        ext = _MIME_EXT.get((mime or '').lower(), 'bin')
+        fname = f"{name}-{h}.{ext}"
+        path = os.path.join(_assets_dir(), fname)
+        with open(path, 'wb') as f:
+            f.write(data_bytes)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return fname
+    except OSError:
+        return None
+
+def _delete_asset_file(fname):
+    if not fname:
+        return
+    try:
+        os.remove(os.path.join(_assets_dir(), os.path.basename(fname)))
+    except OSError:
+        pass
+
+def set_branding_asset(config, name, data_bytes, mime):
+    """Store an uploaded asset as a file and point config at it, dropping any
+    prior file and legacy base64. Returns True on success."""
+    spec = _BRANDING_ASSETS.get(name)
+    if not spec:
+        return False
+    section, b64_key, file_key, mime_key = spec
+    fname = _write_asset_file(name, data_bytes, mime)
+    if not fname:
+        return False
+    src = _asset_src(config, section, create=True)
+    _delete_asset_file(src.get(file_key))
+    src[file_key] = fname
+    src[mime_key] = mime
+    src.pop(b64_key, None)
+    return True
+
+def clear_branding_asset(config, name):
+    """Remove an asset's file and clear its config references."""
+    spec = _BRANDING_ASSETS.get(name)
+    if not spec:
+        return
+    section, b64_key, file_key, mime_key = spec
+    src = _asset_src(config, section, create=True)
+    _delete_asset_file(src.get(file_key))
+    src[file_key] = None
+    src[mime_key] = None
+    src.pop(b64_key, None)
+
+def read_branding_asset(config, name):
+    """Return (bytes, mime) for an asset (from file or legacy base64), or
+    (None, None)."""
     spec = _BRANDING_ASSETS.get(name)
     if not spec:
         return None, None
-    section, data_key, mime_key = spec
-    if section == 'branding':
-        src = config.get('branding', {}) or {}
-    else:
-        src = (config.get('appearance', {}) or {}).get('background', {}) or {}
-    return src.get(data_key), src.get(mime_key)
+    section, b64_key, file_key, mime_key = spec
+    src = _asset_src(config, section)
+    mime = src.get(mime_key)
+    fname = src.get(file_key)
+    if fname:
+        try:
+            with open(os.path.join(_assets_dir(), os.path.basename(fname)), 'rb') as f:
+                return f.read(), mime
+        except OSError:
+            return None, None
+    b64 = src.get(b64_key)
+    if b64:
+        try:
+            return base64.b64decode(b64), mime
+        except Exception:
+            return None, None
+    return None, None
 
 def branding_asset_url(config, name):
-    """Return a cacheable /static URL (with a content version hash for cache
-    busting) for a branding asset, or None if the asset isn't set."""
-    data, _mime = get_branding_asset(config, name)
-    if not data:
+    """Return a cacheable /static URL (with a version token for cache busting)
+    for a branding asset, or None if the asset isn't set. Derives the version
+    from the filename hash without reading the file."""
+    spec = _BRANDING_ASSETS.get(name)
+    if not spec:
         return None
-    ver = hashlib.sha256(data.encode('utf-8')).hexdigest()[:12]
-    return f'/static/{name}?v={ver}'
+    section, b64_key, file_key, mime_key = spec
+    src = _asset_src(config, section)
+    fname = src.get(file_key)
+    if fname:
+        stem = os.path.splitext(os.path.basename(fname))[0]
+        ver = stem.rsplit('-', 1)[-1] if '-' in stem else stem
+        return f'/static/{name}?v={ver}'
+    b64 = src.get(b64_key)
+    if b64:
+        ver = hashlib.sha256(b64.encode('utf-8')).hexdigest()[:12]
+        return f'/static/{name}?v={ver}'
+    return None
+
+def _externalize_branding_images(cfg):
+    """Schema migration: move any inline base64 branding/background images out
+    of the config and into files under the assets dir."""
+    for name, spec in _BRANDING_ASSETS.items():
+        section, b64_key, file_key, mime_key = spec
+        src = _asset_src(cfg, section, create=True)
+        if src.get(file_key):
+            src.pop(b64_key, None)
+            continue
+        b64 = src.get(b64_key)
+        if not b64:
+            continue
+        try:
+            data = base64.b64decode(b64)
+        except Exception:
+            src.pop(b64_key, None)
+            continue
+        fname = _write_asset_file(name, data, src.get(mime_key))
+        if fname:
+            src[file_key] = fname
+            src.pop(b64_key, None)
+        # If the write failed, leave base64 in place; it still serves via the
+        # legacy path and will be retried on the next load.
+
+
+# =============================================================================
+# Config schema versioning
+# =============================================================================
+# Each migration takes the config dict and mutates it in place to advance from
+# version i to i+1. The runner applies pending migrations in order and stamps
+# the new schema_version. Migrations must be idempotent-safe.
+CONFIG_SCHEMA_VERSION = 2
+
+_CONFIG_MIGRATIONS = [
+    _ensure_ids,                    # -> v1: backfill stable iframe/widget IDs
+    _externalize_branding_images,   # -> v2: move base64 images out to files
+]
+
+def _migrate_config(cfg):
+    """Apply pending schema migrations. Returns True if the config changed
+    (caller should persist it)."""
+    current = cfg.get('schema_version')
+    if not isinstance(current, int) or current < 0:
+        current = 0
+    if current >= CONFIG_SCHEMA_VERSION:
+        # Safety net for configs already at the current version but hand-edited
+        # to add iframes/widgets without IDs.
+        return _ensure_ids(cfg)
+    for i in range(current, CONFIG_SCHEMA_VERSION):
+        try:
+            _CONFIG_MIGRATIONS[i](cfg)
+        except Exception as e:
+            server_logger.error(f"Config migration to v{i + 1} failed: {e}")
+    cfg['schema_version'] = CONFIG_SCHEMA_VERSION
+    return True
 
 def parse_multipart(content_type, body):
     """Parse multipart/form-data for file uploads."""
@@ -4824,7 +5042,7 @@ def _generate_dynamic_styles(config, appearance):
             background-attachment: fixed;
         }}
         """
-    elif bg_type == "image" and bg.get("image"):
+    elif bg_type == "image" and (bg.get("image") or bg.get("image_file")):
         size = bg.get("image_size", "cover")
         opacity = bg.get("image_opacity", 100) / 100
         bg_url = branding_asset_url(config, 'background')
@@ -7250,38 +7468,39 @@ def render_admin_page(user, config, message=None, error=None):
     if not users_list:
         users_list = '<li class="empty-state">No users configured</li>'
     
-    # Branding section
+    # Branding section — previews load images from the cacheable /static route
+    # (works for both file-backed and legacy base64 assets).
     branding = config.get("branding", {})
-    logo_preview = ""
-    if branding.get("logo") and branding.get("logo_mime"):
+    logo_url = branding_asset_url(config, 'logo')
+    if logo_url:
         logo_preview = f'''
         <div class="preview-box" style="display:flex;align-items:center;gap:1rem;">
-            <img src="data:{branding["logo_mime"]};base64,{branding["logo"]}" style="height:48px;max-width:200px;object-fit:contain;" alt="Current logo">
+            <img src="{logo_url}" style="height:48px;max-width:200px;object-fit:contain;" alt="Current logo">
             <div style="flex:1;"><strong>Current Logo</strong><small style="display:block;color:var(--text-secondary);">{branding.get("logo_mime", "unknown")}</small></div>
             <form method="POST" action="/admin/branding/logo/delete" style="display:inline;"><button type="submit" class="btn btn-danger btn-sm">Remove</button></form>
         </div>
         '''
     else:
         logo_preview = '<p style="color:var(--text-secondary);margin-bottom:1rem;">No logo uploaded.</p>'
-    
-    favicon_preview = ""
-    if branding.get("favicon") and branding.get("favicon_mime"):
+
+    favicon_url = branding_asset_url(config, 'favicon')
+    if favicon_url:
         favicon_preview = f'''
         <div class="preview-box" style="display:flex;align-items:center;gap:1rem;">
-            <img src="data:{branding["favicon_mime"]};base64,{branding["favicon"]}" style="height:32px;width:32px;object-fit:contain;" alt="Current favicon">
+            <img src="{favicon_url}" style="height:32px;width:32px;object-fit:contain;" alt="Current favicon">
             <div style="flex:1;"><strong>Current Favicon</strong><small style="display:block;color:var(--text-secondary);">{branding.get("favicon_mime", "unknown")}</small></div>
             <form method="POST" action="/admin/branding/favicon/delete" style="display:inline;"><button type="submit" class="btn btn-danger btn-sm">Remove</button></form>
         </div>
         '''
     else:
         favicon_preview = '<p style="color:var(--text-secondary);margin-bottom:1rem;">No favicon uploaded.</p>'
-    
+
     # Apple Touch Icon preview (for iOS Add to Home Screen)
-    apple_touch_icon_preview = ""
-    if branding.get("apple_touch_icon") and branding.get("apple_touch_icon_mime"):
+    apple_icon_url = branding_asset_url(config, 'apple-touch-icon')
+    if apple_icon_url:
         apple_touch_icon_preview = f'''
         <div class="preview-box" style="display:flex;align-items:center;gap:1rem;">
-            <img src="data:{branding["apple_touch_icon_mime"]};base64,{branding["apple_touch_icon"]}" style="height:60px;width:60px;object-fit:contain;border-radius:12px;" alt="Current Apple Touch Icon">
+            <img src="{apple_icon_url}" style="height:60px;width:60px;object-fit:contain;border-radius:12px;" alt="Current Apple Touch Icon">
             <div style="flex:1;"><strong>Current Icon</strong><small style="display:block;color:var(--text-secondary);">{branding.get("apple_touch_icon_mime", "unknown")}</small></div>
             <form method="POST" action="/admin/branding/apple-touch-icon/delete" style="display:inline;"><button type="submit" class="btn btn-danger btn-sm">Remove</button></form>
         </div>
@@ -7290,11 +7509,11 @@ def render_admin_page(user, config, message=None, error=None):
         apple_touch_icon_preview = '<p style="color:var(--text-secondary);margin-bottom:1rem;">No icon uploaded. iOS will use a screenshot.</p>'
 
     # Android Icon preview (for Android Add to Home Screen)
-    android_icon_preview = ""
-    if branding.get("android_icon") and branding.get("android_icon_mime"):
+    android_icon_url = branding_asset_url(config, 'android-icon')
+    if android_icon_url:
         android_icon_preview = f'''
         <div class="preview-box" style="display:flex;align-items:center;gap:1rem;">
-            <img src="data:{branding["android_icon_mime"]};base64,{branding["android_icon"]}" style="height:60px;width:60px;object-fit:contain;" alt="Current Android Icon">
+            <img src="{android_icon_url}" style="height:60px;width:60px;object-fit:contain;" alt="Current Android Icon">
             <div style="flex:1;"><strong>Current Icon</strong><small style="display:block;color:var(--text-secondary);">{branding.get("android_icon_mime", "unknown")}</small></div>
             <form method="POST" action="/admin/branding/android-icon/delete" style="display:inline;"><button type="submit" class="btn btn-danger btn-sm">Remove</button></form>
         </div>
@@ -7304,10 +7523,11 @@ def render_admin_page(user, config, message=None, error=None):
 
     # Background preview
     bg_preview = ""
-    if bg.get("type") == "image" and bg.get("image"):
+    bg_url = branding_asset_url(config, 'background')
+    if bg.get("type") == "image" and bg_url:
         bg_preview = f'''
         <div class="preview-box" style="display:flex;align-items:center;gap:1rem;">
-            <img src="data:{bg.get("image_mime", "image/png")};base64,{bg["image"]}" style="height:60px;max-width:120px;object-fit:cover;border-radius:4px;" alt="Background">
+            <img src="{bg_url}" style="height:60px;max-width:120px;object-fit:cover;border-radius:4px;" alt="Background">
             <div style="flex:1;"><strong>Background Image</strong><small style="display:block;color:var(--text-secondary);">Opacity: {bg.get("image_opacity", 100)}%</small></div>
             <form method="POST" action="/admin/appearance/bg/delete" style="display:inline;"><button type="submit" class="btn btn-danger btn-sm">Remove</button></form>
         </div>
@@ -10447,23 +10667,18 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         self._write_body(body.encode('utf-8'))
     
     def serve_branding_asset(self, config, name):
-        """Serve a base64-stored branding image with long-lived caching and an
-        ETag, honoring If-None-Match for 304s."""
-        b64, mime = get_branding_asset(config, name)
-        if not b64:
+        """Serve a branding image (file-backed, with legacy base64 fallback)
+        with long-lived caching and an ETag, honoring If-None-Match for 304s."""
+        raw, mime = read_branding_asset(config, name)
+        if raw is None:
             self.send_json({'error': 'Not found'}, 404)
             return
-        etag = '"' + hashlib.sha256(b64.encode('utf-8')).hexdigest()[:16] + '"'
+        etag = '"' + hashlib.sha256(raw).hexdigest()[:16] + '"'
         if self.headers.get('If-None-Match') == etag:
             self.send_response(304)
             self.send_header('ETag', etag)
             self.send_header('Cache-Control', 'public, max-age=86400')
             self.end_headers()
-            return
-        try:
-            raw = base64.b64decode(b64)
-        except Exception:
-            self.send_json({'error': 'Invalid asset'}, 500)
             return
         self.send_response(200)
         self.send_header('Content-Type', mime or 'application/octet-stream')
@@ -10586,6 +10801,18 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             # Public so the login page and browser icons load pre-auth.
             self.serve_branding_asset(config, path[len('/static/'):])
 
+        elif path in ('/healthz', '/api/health'):
+            # Lightweight, unauthenticated health/readiness check for kiosk
+            # fleets and load balancers. Exposes no sensitive data.
+            uptime = None
+            if SERVER_START_TIME:
+                uptime = int((datetime.now() - SERVER_START_TIME).total_seconds())
+            self.send_json({
+                'status': 'ok',
+                'version': VERSION,
+                'uptime_seconds': uptime,
+            })
+
         elif path == '/forgot-password':
             if user:
                 self.redirect('/')
@@ -10597,6 +10824,8 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             cookie = SimpleCookie(self.headers.get('Cookie', ''))
             if 'session' in cookie:
                 destroy_session(cookie['session'].value)
+            if user:
+                audit_logger.log('logout', username=user, ip=self.client_address[0])
             self.redirect('/login', clear_cookie=True)
         
         elif path == '/help':
@@ -11015,6 +11244,8 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             # Check rate limiting
             allowed, lockout_msg = check_login_allowed(client_ip)
             if not allowed:
+                audit_logger.log('login_blocked', ip=client_ip,
+                                 username=data.get('username', ''))
                 self.send_html(render_login_page(error=lockout_msg))
                 return
             
@@ -11035,10 +11266,12 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     server_logger.info(f"Migrated password hash to PBKDF2 for user: {username}")
                 session_id = create_session(username)
                 server_logger.info(f"Successful login for user: {username}")
+                audit_logger.log('login_success', username=username, ip=client_ip)
                 self.redirect('/', set_cookie=session_id)
             else:
                 record_failed_login(client_ip)
                 server_logger.warning(f"Failed login attempt for user: {username} from {client_ip}")
+                audit_logger.log('login_failure', username=username, ip=client_ip)
                 self.send_html(render_login_page(error="Invalid username or password"))
         
         elif path == '/forgot-password':
@@ -11116,9 +11349,13 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 
                 if result['success']:
                     server_logger.info(f"Command sent via {protocol} to {host}:{port}", extra=user)
+                    audit_logger.log('command_sent', actor=user, protocol=protocol,
+                                     host=host, port=port, ok=True)
                     self.send_json({'success': True, 'response': result.get('response', '')})
                 else:
                     server_logger.warning(f"Command failed to {host}:{port}: {result.get('error', 'Unknown')}", extra=user)
+                    audit_logger.log('command_sent', actor=user, protocol=protocol,
+                                     host=host, port=port, ok=False)
                     self.send_json({'success': False, 'error': result.get('error', 'Unknown error')})
                     
             except json_mod.JSONDecodeError:
@@ -11436,18 +11673,17 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     self.send_html(render_admin_page(user, config, error=f"Invalid file type. Allowed: PNG, JPG, GIF, SVG, WebP"))
                 elif len(file_data) > MAX_LOGO_SIZE:
                     self.send_html(render_admin_page(user, config, error=f"File too large. Maximum size: {MAX_LOGO_SIZE // 1024}KB"))
+                elif not set_branding_asset(config, 'logo', file_data, mime_type):
+                    self.send_html(render_admin_page(user, config, error="Could not save logo file"))
                 else:
-                    config.setdefault("branding", {})["logo"] = base64.b64encode(file_data).decode('ascii')
-                    config["branding"]["logo_mime"] = mime_type
                     success, err = save_config(config)
                     if success:
                         self.send_html(render_admin_page(user, config, message="Logo uploaded successfully"))
                     else:
                         self.send_html(render_admin_page(user, config, error=err))
-        
+
         elif path == '/admin/branding/logo/delete':
-            config.setdefault("branding", {})["logo"] = None
-            config["branding"]["logo_mime"] = None
+            clear_branding_asset(config, 'logo')
             success, err = save_config(config)
             if success:
                 self.send_html(render_admin_page(user, config, message="Logo removed"))
@@ -11466,18 +11702,17 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     self.send_html(render_admin_page(user, config, error=f"Invalid file type. Allowed: PNG, ICO, SVG"))
                 elif len(file_data) > MAX_LOGO_SIZE:
                     self.send_html(render_admin_page(user, config, error=f"File too large. Maximum size: {MAX_LOGO_SIZE // 1024}KB"))
+                elif not set_branding_asset(config, 'favicon', file_data, mime_type):
+                    self.send_html(render_admin_page(user, config, error="Could not save favicon file"))
                 else:
-                    config.setdefault("branding", {})["favicon"] = base64.b64encode(file_data).decode('ascii')
-                    config["branding"]["favicon_mime"] = mime_type
                     success, err = save_config(config)
                     if success:
                         self.send_html(render_admin_page(user, config, message="Favicon uploaded successfully"))
                     else:
                         self.send_html(render_admin_page(user, config, error=err))
-        
+
         elif path == '/admin/branding/favicon/delete':
-            config.setdefault("branding", {})["favicon"] = None
-            config["branding"]["favicon_mime"] = None
+            clear_branding_asset(config, 'favicon')
             success, err = save_config(config)
             if success:
                 self.send_html(render_admin_page(user, config, message="Favicon removed"))
@@ -11497,18 +11732,17 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     self.send_html(render_admin_page(user, config, error="Apple Touch Icon must be a PNG file"))
                 elif len(file_data) > MAX_LOGO_SIZE:
                     self.send_html(render_admin_page(user, config, error=f"File too large. Maximum size: {MAX_LOGO_SIZE // 1024}KB"))
+                elif not set_branding_asset(config, 'apple-touch-icon', file_data, mime_type):
+                    self.send_html(render_admin_page(user, config, error="Could not save icon file"))
                 else:
-                    config.setdefault("branding", {})["apple_touch_icon"] = base64.b64encode(file_data).decode('ascii')
-                    config["branding"]["apple_touch_icon_mime"] = mime_type
                     success, err = save_config(config)
                     if success:
                         self.send_html(render_admin_page(user, config, message="iOS Home Screen icon uploaded successfully"))
                     else:
                         self.send_html(render_admin_page(user, config, error=err))
-        
+
         elif path == '/admin/branding/apple-touch-icon/delete':
-            config.setdefault("branding", {})["apple_touch_icon"] = None
-            config["branding"]["apple_touch_icon_mime"] = None
+            clear_branding_asset(config, 'apple-touch-icon')
             success, err = save_config(config)
             if success:
                 self.send_html(render_admin_page(user, config, message="iOS Home Screen icon removed"))
@@ -11528,9 +11762,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     self.send_html(render_admin_page(user, config, error="Android icon must be a PNG file"))
                 elif len(file_data) > MAX_LOGO_SIZE:
                     self.send_html(render_admin_page(user, config, error=f"File too large. Maximum size: {MAX_LOGO_SIZE // 1024}KB"))
+                elif not set_branding_asset(config, 'android-icon', file_data, mime_type):
+                    self.send_html(render_admin_page(user, config, error="Could not save icon file"))
                 else:
-                    config.setdefault("branding", {})["android_icon"] = base64.b64encode(file_data).decode('ascii')
-                    config["branding"]["android_icon_mime"] = mime_type
                     success, err = save_config(config)
                     if success:
                         self.send_html(render_admin_page(user, config, message="Android Home Screen icon uploaded successfully"))
@@ -11538,8 +11772,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                         self.send_html(render_admin_page(user, config, error=err))
 
         elif path == '/admin/branding/android-icon/delete':
-            config.setdefault("branding", {})["android_icon"] = None
-            config["branding"]["android_icon_mime"] = None
+            clear_branding_asset(config, 'android-icon')
             success, err = save_config(config)
             if success:
                 self.send_html(render_admin_page(user, config, message="Android Home Screen icon removed"))
@@ -11560,8 +11793,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             else:
                 config["users"][username] = {"password_hash": hash_password(password), "is_admin": is_admin}
                 save_config(config)
+                audit_logger.log('user_add', actor=user, target=username, is_admin=is_admin)
                 self.send_html(render_admin_page(user, config, message=f"User '{username}' created"))
-        
+
         elif path == '/admin/user/delete':
             username = data.get('username', '')
             if username == user:
@@ -11569,6 +11803,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             elif username in config["users"]:
                 del config["users"][username]
                 save_config(config)
+                audit_logger.log('user_delete', actor=user, target=username)
                 self.send_html(render_admin_page(user, config, message=f"User '{username}' deleted"))
             else:
                 self.send_html(render_admin_page(user, config, error="User not found"))
@@ -11589,6 +11824,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 success, err = save_config(config)
                 if success:
                     server_logger.info(f"Password changed for user: {target_username} by admin: {user}")
+                    audit_logger.log('password_change', actor=user, target=target_username)
                     self.send_html(render_admin_page(user, config, message=f"Password updated for '{target_username}'"))
                 else:
                     self.send_html(render_admin_page(user, config, error=err))
@@ -11605,6 +11841,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 success, err = save_config(config)
                 if success:
                     server_logger.info(f"Permissions reset (see all) for user: {target_username} by admin: {user}")
+                    audit_logger.log('permissions_reset', actor=user, target=target_username)
                     self.send_html(render_admin_page(user, config, message=f"Permissions reset for '{target_username}' — sees everything"))
                 else:
                     self.send_html(render_admin_page(user, config, error=err))
@@ -11626,6 +11863,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 success, err = save_config(config)
                 if success:
                     server_logger.info(f"Permissions updated for user: {target_username} by admin: {user}")
+                    audit_logger.log('permissions_update', actor=user, target=target_username)
                     self.send_html(render_admin_page(user, config, message=f"Permissions updated for '{target_username}'"))
                 else:
                     self.send_html(render_admin_page(user, config, error=err))
@@ -11899,16 +12137,16 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     if file_info['content_type'] not in ALLOWED_IMAGE_TYPES:
                         self.send_html(render_admin_page(user, config, error="Invalid image type"))
                         return
-                    config["appearance"]["background"]["image"] = base64.b64encode(file_info['data']).decode('ascii')
-                    config["appearance"]["background"]["image_mime"] = file_info['content_type']
-            
+                    if not set_branding_asset(config, 'background', file_info['data'], file_info['content_type']):
+                        self.send_html(render_admin_page(user, config, error="Could not save background image"))
+                        return
+
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Background saved"))
-        
+
         elif path == '/admin/appearance/bg/delete':
             config.setdefault("appearance", {}).setdefault("background", {})
-            config["appearance"]["background"]["image"] = None
-            config["appearance"]["background"]["image_mime"] = None
+            clear_branding_asset(config, 'background')
             config["appearance"]["background"]["type"] = "solid"
             save_config(config)
             self.send_html(render_admin_page(user, config, message="Background image removed"))
@@ -13084,6 +13322,16 @@ def main():
 
     # Print banner
     print_banner(args, config, use_color)
+
+    # Optional audit logging to disk (enabled via MF_AUDIT_LOG=/path/to/file)
+    audit_path = os.environ.get('MF_AUDIT_LOG')
+    if audit_path:
+        try:
+            max_bytes = int(os.environ.get('MF_AUDIT_MAX_BYTES', '1000000'))
+        except ValueError:
+            max_bytes = 1000000
+        audit_logger.configure(audit_path, max_bytes=max_bytes)
+        audit_logger.log('server_start', version=VERSION)
 
     # Background cleanup of expired sessions / login-lockout entries
     start_state_sweeper()

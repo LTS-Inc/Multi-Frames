@@ -82,7 +82,7 @@ A deeper review with file:line references and severity grouping lives in
 
 ### Medium
 
-- [ ] **Complete modular package** — `multi_frames/templates/` is marked TODO. Finish splitting the single-file source into the modular package for easier development.
+- [x] **Modular package** — resolved in v1.7.0 by **deleting** the non-runnable scaffolding (decision: single-file `multi_frames.py` is the authoritative source; the refactor was not pursued).
 
 - [x] **Add automated tests** — done in v1.4.8. `tests/` holds a zero-dependency stdlib runner and 39 tests covering `hash_password()`, `validate_local_ip()`, `escape_html()`, rate limiter, session lifecycle, config round-trip, iframe/widget ID backfill, per-user permission filtering, login flow, admin gating, proxy SSRF regression, and Node syntax check of `cloud/worker.js`. Run: `python tests/run_tests.py`.
 
@@ -92,8 +92,8 @@ A deeper review with file:line references and severity grouping lives in
 
 ## Features
 
-- [ ] **Move images out of config JSON** — Branding images (logo up to 500KB, background up to 2MB) are base64-encoded inside the JSON config. Store as separate files, reference by path. Reduces config size and memory usage.
+- [x] **Move images out of config JSON** — done in v1.7.0 (schema migration v2). Branding/background images live as files under `multi_frames_assets/`, referenced by filename + mime; legacy base64 is migrated on load.
 
-- [ ] **Persist logs to disk** — `ServerLogger` stores logs in an in-memory deque only (`multi_frames.py:347`). Add optional file-based logging with rotation for audit trails.
+- [x] **Persist logs to disk** — done in v1.7.0. Opt-in audit log (`MF_AUDIT_LOG`) writes security events as size-rotated JSONL via the `AuditLogger` class. (The general request/debug `ServerLogger` remains in-memory by design.)
 
 - [ ] **Add connectivity report rotation** — Reports stored in config (`multi_frames.py:10144`) grow unbounded. Cap at N reports or move to a separate file.

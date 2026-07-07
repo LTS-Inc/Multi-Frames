@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.4.8-2026--04--16-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.7.0-2026--07--07-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -585,6 +585,12 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.7.0** | 2026-07-07 | Config schema migrations, branding images moved to files, opt-in audit log, `/healthz`, removed dead modular package |
+| **1.6.1** | 2026-07-07 | Performance: in-memory config cache, cached CSS, gzip, cacheable `/static` branding assets |
+| **1.6.0** | 2026-07-07 | Security hardening: PBKDF2 hashing, thread-safety, atomic config, security headers, CSRF, sweeper |
+| **1.5.1** | 2026-07-07 | Correctness: proxy-by-id, fallback panel wired, log ordering, JS escaping, embed/status fixes |
+| **1.5.0** | 2026-07-07 | Security fixes: HMAC JWT, portal XSS, tunnel authz, send-command SSRF, socket/conn leaks |
+| **1.4.9** | 2026-05-25 | Soundtrack Your Brand integration + control-panel widget |
 | **1.4.8** | 2026-04-16 | Per-user iframe/widget permissions, stable IDs with migration, test suite, codebase review |
 | **1.4.7** | 2026-03-31 | Fix iframe proxy breaking local display, proxy only for remote clients |
 | **1.4.6** | 2026-03-08 | Fix tunnel navigation (Admin/Help links), add POST proxy support |

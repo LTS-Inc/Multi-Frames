@@ -166,6 +166,7 @@ class ServerIntegrationTests(unittest.TestCase):
         # Ensure an iframe pointing at a non-local URL is rejected.
         cfg = self.mf.load_config()
         cfg.setdefault("iframes", []).append({
+            "id": "ext00001",
             "url": "http://example.com/",
             "name": "external",
         })
@@ -173,8 +174,7 @@ class ServerIntegrationTests(unittest.TestCase):
         # Need an auth cookie first.
         login = self._post_form("/login", {"username": "admin", "password": "admin123"})
         session = _extract_session(login.headers.get("Set-Cookie", ""))
-        idx = len(cfg["iframes"]) - 1
-        resp = self._get(f"/proxy/{idx}/", cookie=session)
+        resp = self._get("/proxy/ext00001/", cookie=session)
         self.assertEqual(resp.status, 403)
 
     def test_permissions_restrict_non_admin_user(self):
@@ -209,6 +209,32 @@ class ServerIntegrationTests(unittest.TestCase):
         self.assertIn("DASHBOARD_ALPHA_MARKER", body)
         self.assertNotIn("DASHBOARD_BETA_MARKER", body)
 
+    def test_proxy_enforces_permissions_by_id(self):
+        """A restricted user cannot proxy an iframe hidden from them (U-1)."""
+        mf = self.mf
+        cfg = mf.load_config()
+        allowed_id = mf.secrets.token_hex(4)
+        hidden_id = mf.secrets.token_hex(4)
+        cfg["iframes"] = [
+            {"id": allowed_id, "name": "ALLOWED", "url": "http://127.0.0.1/",
+             "height": 200, "width": 100, "zoom": 100},
+            {"id": hidden_id, "name": "HIDDEN", "url": "http://127.0.0.1/",
+             "height": 200, "width": 100, "zoom": 100},
+        ]
+        cfg["settings"]["iframe_proxy"] = True
+        cfg["users"]["carol"] = {
+            "password_hash": mf.hash_password("secret"),
+            "is_admin": False,
+            "allowed_iframes": [allowed_id],
+            "allowed_widgets": None,
+        }
+        mf.save_config(cfg)
+        login = self._post_form("/login", {"username": "carol", "password": "secret"})
+        session = _extract_session(login.headers.get("Set-Cookie", ""))
+        # The hidden iframe's id must resolve to 404, not another iframe's content.
+        resp = self._get(f"/proxy/{hidden_id}/", cookie=session)
+        self.assertEqual(resp.status, 404)
+
     def test_admin_always_sees_everything(self):
         """Even if the admin's own record has an empty allow-list, admin sees all."""
         mf = self.mf
@@ -242,14 +268,14 @@ class ServerIntegrationTests(unittest.TestCase):
         try:
             cfg = self.mf.load_config()
             cfg.setdefault("iframes", []).append({
+                "id": "redir001",
                 "url": upstream.url,  # local (127.0.0.1) → passes validate_local_ip
                 "name": "redirector",
             })
             self.mf.save_config(cfg)
             login = self._post_form("/login", {"username": "admin", "password": "admin123"})
             session = _extract_session(login.headers.get("Set-Cookie", ""))
-            idx = len(cfg["iframes"]) - 1
-            resp = self._get(f"/proxy/{idx}/", cookie=session)
+            resp = self._get("/proxy/redir001/", cookie=session)
             body = b""
             try:
                 body = resp.read()

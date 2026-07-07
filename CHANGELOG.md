@@ -5,6 +5,26 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-07-07
+
+### Fixed
+- **iFrame proxy is now addressed by stable id, not list index.** `render_main_page` renders the per-user *filtered* iframe list but `/proxy/` indexed the *unfiltered* list, so a restricted user's frame could load a different (hidden) iframe's content. The endpoint is now `/proxy/<id>` and resolves the target against the requesting user's permitted iframes — fixing both the wrong-content bug and a permission-bypass.
+- **Fallback content now actually appears.** The configured fallback panel (image + text) was stored and configurable but never shown. Iframes now reveal their fallback panel on an `error` event or after a load timeout via a new `mfShowFallback` page script.
+- **Requests/Errors log tabs show the newest entries.** They sliced `[:30]`/`[:20]` off chronological lists (the *oldest* rows); now `[-30:]`/`[-20:]`.
+- **Notes widget renders line breaks.** It replaced the literal two-character string `\n` instead of real newlines, collapsing multi-line notes to one line.
+- **Embed-code iframes can be saved without a URL.** The URL field was `required` even in embed mode (which ignores it); the add/edit embed toggles now clear `required` when embed mode is on.
+- **Inline JS handlers and widget scripts are JS-escaped.** Values interpolated into `onclick`/`<script>` (weather location, countdown target, iframe test buttons) used HTML-escaping, which the parser decodes before JS runs — a name like `Bob's Camera` or city `St. John's` broke the handler. Added `escape_js_string()` and applied it at these sites. `escape_html()` now also escapes the single quote (`'` → `&#39;`).
+- **Missing `.status-dot` CSS added.** Connectivity/test indicators and the firmware/restore "spinner" divs referenced `.status-dot`/`.connected`/`.loading`/`.error` classes that were never defined (invisible dots, no spinners). Added the classes plus a spin keyframe.
+- **Proxy redirects honor scheme and re-validate the host.** The `/proxy/` redirect loop now re-runs `validate_local_ip()` on each absolute hop (blocking a local→external SSRF bounce), rejects protocol-relative `Location`, and reconnects over HTTPS (port 443) when a redirect target is `https://` instead of always plaintext port 80.
+- **Cloud metrics averages use per-metric denominators.** The worker divided each running mean (cpu_temp, memory_pct, cpu_usage) by the total sample count, skewing values low when some samples omit a metric. Each metric now tracks its own non-null count.
+- **Cloud CPU usage reports current load.** The device computed `cpu_usage` from cumulative `/proc/stat` counters (a near-constant since-boot average); it now samples twice and reports the delta.
+
+### Changed
+- CLAUDE.md corrected: iFrame reordering is via ▲/▼ move buttons (drag-and-drop was never implemented); documented the `/proxy/<id>` addressing and the now-functional fallback panel.
+
+### Added
+- Regression tests: proxy permission enforcement by id (`test_proxy_enforces_permissions_by_id`), updated SSRF/external proxy tests to the id scheme, and `escape_html`/`escape_js_string` unit tests. Suite is now 58 tests.
+
 ## [1.5.0] - 2026-07-07
 
 ### Security

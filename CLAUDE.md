@@ -7,7 +7,7 @@ This document provides context for AI assistants working on the Multi-Frames cod
 **Multi-Frames** is a zero-dependency Python web server for displaying configurable iFrames and dashboard widgets. Designed for home dashboards, kiosks, digital signage, and Raspberry Pi deployments.
 
 - **Author**: Marco Longoria, LTS, Inc.
-- **Version**: 1.4.8
+- **Version**: 1.5.1
 - **License**: MIT
 - **Python**: 3.6+
 
@@ -120,10 +120,10 @@ python -m multi_frames --port 8080
 
 ### 1. iFrame Management
 - Add/edit/delete iFrames with URLs, dimensions, zoom
-- Drag-and-drop reordering
+- Reordering via up/down (▲/▼) move buttons
 - Connectivity testing (server-side ping)
-- Fallback content for failed loads
-- Stable 8-char hex `id` on every iframe (backfilled on upgrade) — permissions and future references should use `id`, not list index
+- Fallback content for failed loads — a configured fallback panel (image + text) is revealed when an iframe errors or never finishes loading (`render_main_page`'s `mfShowFallback` script)
+- Stable 8-char hex `id` on every iframe (backfilled on upgrade) — permissions and references (including the `/proxy/<id>` endpoint) use `id`, not list index
 
 ### 2. Dashboard Widgets
 - Clock, weather, buttons, text, images
@@ -291,4 +291,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.4.8** (2026-04-16)
+Current: **v1.5.1** (2026-07-07)

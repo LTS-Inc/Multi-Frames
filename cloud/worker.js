@@ -1046,6 +1046,12 @@ export default {
         const summary = await env.CONFIGS.get(summaryKey, 'json') || {
           date: dayKey,
           data_points: 0,
+          // Per-metric non-null sample counts, used as averaging denominators
+          // so samples that omit a metric (e.g. non-Pi devices reporting a
+          // null cpu_temp) don't skew the running mean.
+          count_cpu_temp: 0,
+          count_memory_pct: 0,
+          count_cpu_usage: 0,
           avg_cpu_temp: null,
           max_cpu_temp: null,
           avg_memory_pct: null,
@@ -1060,29 +1066,32 @@ export default {
         summary.hours_online = Object.keys(summary.hours).length;
 
         if (metrics.cpu_temp !== null) {
+          summary.count_cpu_temp = (summary.count_cpu_temp || 0) + 1;
           if (summary.avg_cpu_temp === null) {
             summary.avg_cpu_temp = metrics.cpu_temp;
             summary.max_cpu_temp = metrics.cpu_temp;
           } else {
-            summary.avg_cpu_temp = (summary.avg_cpu_temp * (summary.data_points - 1) + metrics.cpu_temp) / summary.data_points;
+            summary.avg_cpu_temp += (metrics.cpu_temp - summary.avg_cpu_temp) / summary.count_cpu_temp;
             summary.max_cpu_temp = Math.max(summary.max_cpu_temp, metrics.cpu_temp);
           }
         }
 
         if (metrics.memory_used !== null && metrics.memory_total !== null && metrics.memory_total > 0) {
           const memPct = (metrics.memory_used / metrics.memory_total) * 100;
+          summary.count_memory_pct = (summary.count_memory_pct || 0) + 1;
           if (summary.avg_memory_pct === null) {
             summary.avg_memory_pct = memPct;
           } else {
-            summary.avg_memory_pct = (summary.avg_memory_pct * (summary.data_points - 1) + memPct) / summary.data_points;
+            summary.avg_memory_pct += (memPct - summary.avg_memory_pct) / summary.count_memory_pct;
           }
         }
 
         if (metrics.cpu_usage !== null) {
+          summary.count_cpu_usage = (summary.count_cpu_usage || 0) + 1;
           if (summary.avg_cpu_usage === null) {
             summary.avg_cpu_usage = metrics.cpu_usage;
           } else {
-            summary.avg_cpu_usage = (summary.avg_cpu_usage * (summary.data_points - 1) + metrics.cpu_usage) / summary.data_points;
+            summary.avg_cpu_usage += (metrics.cpu_usage - summary.avg_cpu_usage) / summary.count_cpu_usage;
           }
         }
 

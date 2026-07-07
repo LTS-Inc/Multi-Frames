@@ -189,17 +189,19 @@ The cloud tunnel path allowed unauthenticated admin-equivalent access; this is n
 | Close the socket + proxy-conn leaks (`try/finally`) | N-2, N-5 | S | ✅ |
 | Fix tunnel admin-user selection (`is_admin`) | N-4 | S | ✅ (pulled forward) |
 
-### Phase 1 — Correctness bugs users hit
-| Item | Refs | Effort |
-|------|------|--------|
-| Address proxy by stable iframe `id`, not index | U-1 | M |
-| Wire up (or remove) the fallback-image feature | U-2 | M |
-| Fix Requests/Errors tabs to show newest entries | U-5 | S |
-| Fix notes line breaks; embed-code `required`; status-dot CSS | U-6, U-7, U-3 | S |
-| Real JS-string escaping for inline handlers; finish `escape_html(')` | U-8 | M |
-| Fix tunnel admin-user selection (`is_admin`) | N-4 | S |
-| Honor scheme + re-validate host on proxy redirects | N-3 | S |
-| Correct the metrics running-average denominator + CPU delta | C-6, N-7 | S |
+### Phase 1 — Correctness bugs users hit — ✅ DONE (v1.5.1)
+| Item | Refs | Effort | Status |
+|------|------|--------|--------|
+| Address proxy by stable iframe `id`, not index | U-1 | M | ✅ |
+| Wire up the fallback-image feature | U-2 | M | ✅ |
+| Fix Requests/Errors tabs to show newest entries | U-5 | S | ✅ |
+| Fix notes line breaks; embed-code `required`; status-dot CSS | U-6, U-7, U-3 | S | ✅ |
+| Real JS-string escaping for inline handlers; finish `escape_html(')` | U-8 | M | ✅ |
+| Fix tunnel admin-user selection (`is_admin`) | N-4 | S | ✅ (done in Phase 0) |
+| Honor scheme + re-validate host on proxy redirects | N-3 | S | ✅ |
+| Correct the metrics running-average denominator + CPU delta | C-6, N-7 | S | ✅ |
+
+Remaining low-severity UI items (deferred, not blocking): buttons-editor `:empty` placeholder (U-11), stale `localStorage.adminTab` null-guard, clipboard-copy fallback over plain HTTP, blank-dashboard empty-state when only disabled widgets exist.
 
 ### Phase 2 — Hardening & correctness from the standing backlog
 Fold in the still-open REVIEW.md / TODO.md items now that the acute issues are closed:

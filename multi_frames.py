@@ -295,7 +295,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 VERSION_DATE = "2026-07-07"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -1155,15 +1155,22 @@ class CloudAgent:
             'uptime': sys_info.get('server_uptime_seconds', 0),
         }
 
-        # Try to get CPU usage on Linux
+        # CPU usage on Linux: sample /proc/stat twice and use the delta, so we
+        # report current load rather than a near-constant since-boot average.
         try:
-            with open('/proc/stat', 'r') as f:
-                line = f.readline()
-                parts = line.split()
-                total = sum(int(p) for p in parts[1:])
-                idle = int(parts[4])
-                usage = round((1 - idle / total) * 100, 1) if total > 0 else None
-                metrics_data['cpu_usage'] = usage
+            import time as _time
+
+            def _read_cpu():
+                with open('/proc/stat', 'r') as f:
+                    parts = f.readline().split()
+                return sum(int(p) for p in parts[1:]), int(parts[4])
+
+            total1, idle1 = _read_cpu()
+            _time.sleep(0.1)
+            total2, idle2 = _read_cpu()
+            dtotal = total2 - total1
+            didle = idle2 - idle1
+            metrics_data['cpu_usage'] = round((1 - didle / dtotal) * 100, 1) if dtotal > 0 else None
         except Exception:
             metrics_data['cpu_usage'] = None
 
@@ -3385,10 +3392,27 @@ def send_network_command(protocol, host, port, command, timeout=5):
 
 
 def escape_html(text):
-    """Escape HTML special characters."""
+    """Escape HTML special characters (including the single quote)."""
     if text is None:
         return ""
-    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#39;"))
+
+
+def escape_js_string(text):
+    """Escape a value for safe inclusion inside a single- or double-quoted
+    JavaScript string literal. Use this for values interpolated into inline
+    event handlers or <script> string literals — HTML-escaping is not enough
+    there because the HTML parser decodes entities before JS runs."""
+    if text is None:
+        return ""
+    return (str(text)
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("</", "<\\/"))
 
 def parse_multipart(content_type, body):
     """Parse multipart/form-data for file uploads."""
@@ -3980,6 +4004,33 @@ details[open] summary {
 }
 .status.online { background: var(--success); }
 .status.offline { background: var(--danger); }
+
+/* Status dot — connectivity/test indicators and loading spinners.
+   Rendered as a small colored circle; the loading variant is a spinner. */
+.status-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: currentColor;
+    color: var(--text-secondary);
+    font-size: 0;
+    line-height: 0;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+.status-dot.connected { color: var(--success, #22c55e); }
+.status-dot.error { color: var(--danger, #ef4444); }
+.status-dot.loading {
+    width: 14px;
+    height: 14px;
+    background: transparent;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent, #3b82f6);
+    animation: mf-spin 0.7s linear infinite;
+    color: transparent;
+}
+@keyframes mf-spin { to { transform: rotate(360deg); } }
 
 /* Background overlay for images */
 .bg-overlay {
@@ -4985,10 +5036,14 @@ def render_help_page(user, config):
     iframe_test_rows = ""
 
     for i, iframe in enumerate(iframes):
-        name = escape_html(iframe.get('name', f'Frame {i+1}'))
-        name_js_escaped = name.replace("'", "\\'")  # Escape for JS string
+        name_raw = iframe.get('name', f'Frame {i+1}')
+        name = escape_html(name_raw)
         url = iframe.get('url', '')
-        url_escaped = escape_html(url).replace("'", "&#39;")
+        # For inline onclick handlers: JS-escape the raw value, then protect the
+        # double-quote that delimits the HTML attribute. HTML-escaping alone is
+        # unsafe here because the parser decodes entities before JS runs.
+        name_js_escaped = escape_js_string(name_raw).replace('"', '&quot;')
+        url_escaped = escape_js_string(url).replace('"', '&quot;')
         enabled = iframe.get('enabled', True)
 
         if not enabled:
@@ -5739,7 +5794,8 @@ def render_widget(widget, config):
         </script>
         '''
     elif wtype == 'countdown':
-        target = escape_html(content) if content else '2025-01-01 00:00'
+        # Used inside a JS string literal, so JS-escape (not HTML-escape).
+        target = escape_js_string(content) if content else '2025-01-01 00:00'
         inner = f'''
         <div class="widget-countdown">
             <div class="countdown-label">{name}</div>
@@ -5788,6 +5844,7 @@ def render_widget(widget, config):
             location = raw_content.rsplit(',', 1)[0].strip()
         
         location_escaped = escape_html(location)
+        location_js = escape_js_string(location)  # for the JS string literal below
         widget_id = f"weather-{id(widget)}"
         temp_unit = 'celsius' if use_celsius else 'fahrenheit'
         temp_symbol = '°C' if use_celsius else '°F'
@@ -5807,7 +5864,7 @@ def render_widget(widget, config):
         <script>
         (function() {{
             var widgetId = '{widget_id}';
-            var locationInput = '{location_escaped}';
+            var locationInput = '{location_js}';
             var tempUnit = '{temp_unit}';
             var tempSymbol = '{temp_symbol}';
             var windUnit = '{wind_unit}';
@@ -5928,7 +5985,7 @@ def render_widget(widget, config):
         </script>
         '''
     elif wtype == 'notes':
-        notes_text = escape_html(content).replace('\\n', '<br>') if content else 'No notes'
+        notes_text = escape_html(content).replace('\n', '<br>') if content else 'No notes'
         inner = f'<div class="widget-notes">{notes_text}</div>'
     elif wtype == 'buttons':
         # Parse buttons from content (JSON format)
@@ -6088,6 +6145,15 @@ def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
     fallback_text = escape_html(fallback_config.get('text', 'Content Unavailable'))
     fallback_image = fallback_config.get('image', '')
     fallback_mime = fallback_config.get('image_mime', 'image/png')
+
+    # Pre-render the shared fallback content shown when an iframe fails to load.
+    if fallback_enabled:
+        _fb_img = ''
+        if fallback_image:
+            _fb_img = f'<img src="data:{fallback_mime};base64,{fallback_image}" alt="" />'
+        fallback_content_html = f'<div class="fallback-content">{_fb_img}<div class="fallback-text">{fallback_text}</div></div>'
+    else:
+        fallback_content_html = ''
     
     if not iframes and not widgets:
         content = """
@@ -6168,6 +6234,7 @@ def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
                 pass
         iframe_html = ""
         for i, iframe in enumerate(iframes):
+            iframe_id = iframe.get("id") or f"idx{i}"
             name = escape_html(iframe.get("name", f"Frame {i+1}"))
             url = escape_html(iframe.get("url", ""))
             raw_url = iframe.get("url", "")
@@ -6303,14 +6370,17 @@ def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
                     # Relative path (no leading slash) so it resolves correctly
                     # both for direct access (page at /) and through the cloud
                     # tunnel (page at /api/tunnel/proxy/<tid>/).
-                    iframe_url = f'proxy/{i}{hash_frag}'
+                    iframe_url = f'proxy/{iframe_id}{hash_frag}'
+                # When a fallback is configured, flag the iframe so the page
+                # script can reveal the fallback panel if the frame errors.
+                fb_attr = ' data-fallback="1" onerror="mfShowFallback(this)"' if fallback_enabled else ''
                 if wrapper_style_str:
-                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe></div>'
+                    iframe_inner = f'<div class="iframe-wrapper" style="{wrapper_style_str}"><iframe id="iframe-{iframe_id}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}{fb_attr}></iframe></div>'
                 else:
-                    iframe_inner = f'<iframe id="iframe-{i}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}></iframe>'
-            
+                    iframe_inner = f'<iframe id="iframe-{iframe_id}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}{fb_attr}></iframe>'
+
             # Fallback placeholder (hidden by default)
-            fallback_div = f'<div id="fallback-{i}" class="iframe-fallback" style="display:none;height:{height}px;"></div>'
+            fallback_div = f'<div id="fallback-{iframe_id}" class="iframe-fallback" style="display:none;height:{height}px;">{fallback_content_html}</div>'
             
             iframe_html += f"""
             <div class="iframe-card" style="{card_style_str}">
@@ -6401,7 +6471,33 @@ def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
         </script>
         """
         
-        content = f'{widgets_html}<div class="iframe-grid" style="--cols:{cols};">{iframe_html}</div>{status_script}{command_script}'
+        # Fallback reveal script — shows the configured fallback panel when an
+        # iframe fires an error event, and as a safety net when a frame never
+        # finishes loading within a timeout.
+        fallback_script = ""
+        if fallback_enabled:
+            fallback_script = """
+        <script>
+        function mfShowFallback(el) {
+            var wrap = el.closest('.iframe-content-wrapper');
+            if (!wrap) return;
+            var fb = wrap.querySelector('.iframe-fallback');
+            var frame = wrap.querySelector('iframe');
+            if (fb) fb.style.display = 'flex';
+            if (frame) frame.style.display = 'none';
+        }
+        (function() {
+            var frames = document.querySelectorAll('iframe[data-fallback]');
+            frames.forEach(function(frame) {
+                var loaded = false;
+                frame.addEventListener('load', function() { loaded = true; });
+                setTimeout(function() { if (!loaded) mfShowFallback(frame); }, 20000);
+            });
+        })();
+        </script>
+        """
+
+        content = f'{widgets_html}<div class="iframe-grid" style="--cols:{cols};">{iframe_html}</div>{status_script}{command_script}{fallback_script}'
     
     # Add auto-refresh if configured
     refresh_script = ""
@@ -6649,7 +6745,7 @@ def render_admin_page(user, config, message=None, error=None):
                             </div>
                             <div class="form-group" style="flex:2;">
                                 <label>URL {"" if allow_external else "(Local IPs only)"}</label>
-                                <input type="url" name="url" value="{url}" required>
+                                <input type="url" id="url-edit-{i}" name="url" value="{url}" {"" if use_embed_code else "required"}>
                             </div>
                         </div>
                     </div>
@@ -6786,7 +6882,10 @@ def render_admin_page(user, config, message=None, error=None):
                         
                         <script>
                         function toggleEmbedCode{i}(val) {{
-                            document.getElementById('embed-code-edit-{i}').style.display = val === '1' ? 'block' : 'none';
+                            var on = val === '1';
+                            document.getElementById('embed-code-edit-{i}').style.display = on ? 'block' : 'none';
+                            var u = document.getElementById('url-edit-{i}');
+                            if (u) u.required = !on;
                         }}
                         </script>
                     </div>
@@ -7117,7 +7216,7 @@ def render_admin_page(user, config, message=None, error=None):
                 <form method="POST" action="/admin/iframe/add">
                     <div class="inline-form" style="margin-bottom:1rem;">
                         <div class="form-group"><label>Name</label><input type="text" name="name" placeholder="Display name" required></div>
-                        <div class="form-group" style="flex:2;"><label>URL</label><input type="url" name="url" placeholder="http://192.168.1.100:8000" required></div>
+                        <div class="form-group" style="flex:2;"><label>URL</label><input type="url" id="url-add" name="url" placeholder="http://192.168.1.100:8000" required></div>
                         <div class="form-group" style="flex:0.5;"><label>Height (px)</label><input type="number" name="height" value="400" min="100" max="2000"></div>
                     </div>
                     <details style="margin-bottom:1rem;">
@@ -7174,7 +7273,10 @@ def render_admin_page(user, config, message=None, error=None):
                             <small style="color:var(--danger);display:block;margin-top:0.5rem;">⚠️ Many websites block iframe embedding. External URLs and embed codes work best with sites that allow it.</small>
                             <script>
                             function toggleAddEmbedCode(val) {{
-                                document.getElementById('embed-code-add').style.display = val === '1' ? 'block' : 'none';
+                                var on = val === '1';
+                                document.getElementById('embed-code-add').style.display = on ? 'block' : 'none';
+                                var u = document.getElementById('url-add');
+                                if (u) u.required = !on;
                             }}
                             </script>
                         </div>
@@ -9297,7 +9399,7 @@ def render_modern_logs(config):
     
     # Build requests HTML
     requests_html = ""
-    for req in reversed(recent_requests[:30]):
+    for req in reversed(recent_requests[-30:]):
         status = req.get('status', 0)
         if 200 <= status < 300:
             status_color, status_bg = '#22c55e', 'rgba(34,197,94,0.1)'
@@ -9328,7 +9430,7 @@ def render_modern_logs(config):
     
     # Build errors HTML
     errors_html = ""
-    for err in reversed(recent_errors[:20]):
+    for err in reversed(recent_errors[-20:]):
         time_str = err['timestamp'].split(' ')[1] if ' ' in err['timestamp'] else err['timestamp']
         errors_html += f'''
         <div style="padding:0.75rem;border-bottom:1px solid var(--border);background:rgba(239,68,68,0.05);">
@@ -9734,9 +9836,12 @@ def render_system_section(config):
     iframes = config.get('iframes', [])
     iframe_test_html = ""
     for i, iframe in enumerate(iframes):
-        name = escape_html(iframe.get('name', f'Frame {i+1}'))
+        name_raw = iframe.get('name', f'Frame {i+1}')
+        name = escape_html(name_raw)
         url = iframe.get('url', '')
-        url_escaped = escape_html(url).replace("'", "&#39;")
+        # Inline onclick args: JS-escape then guard the attribute's double quote.
+        url_escaped = escape_js_string(url).replace('"', '&quot;')
+        name_js_escaped = escape_js_string(name_raw).replace('"', '&quot;')
         enabled = iframe.get('enabled', True)
         enabled_badge = '' if enabled else ' <span style="font-size:0.7rem;color:var(--text-secondary);">(disabled)</span>'
         
@@ -9763,7 +9868,7 @@ def render_system_section(config):
                 <span style="flex:1;font-weight:500;min-width:100px;">{name}{enabled_badge}</span>
                 <span style="font-size:0.7rem;padding:0.15rem 0.35rem;background:{'rgba(34,197,94,0.1)' if is_https else 'rgba(245,158,11,0.1)'};color:{'#22c55e' if is_https else '#f59e0b'};border-radius:3px;">{'🔒' if is_https else '⚠️'}</span>
                 <span style="color:var(--text-secondary);font-size:0.75rem;font-family:monospace;">{escape_html(host[:25])}</span>
-                <button class="btn btn-sm btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.75rem;" onclick="testUrl({i},'{url_escaped}','{name}')">Test</button>
+                <button class="btn btn-sm btn-secondary" style="padding:0.2rem 0.5rem;font-size:0.75rem;" onclick="testUrl({i},'{url_escaped}','{name_js_escaped}')">Test</button>
             </div>'''
     
     if not iframe_test_html:
@@ -10344,21 +10449,28 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_html(render_page("Proxy Disabled", '<div class="card"><h2>Proxy Disabled</h2><p>iFrame proxy is not enabled in settings.</p></div>', user, config), 403)
                 return
 
-            # Extract iframe index and sub-path: /proxy/0/sub/path
+            # Extract iframe id and sub-path: /proxy/<id>/sub/path
+            # Addressing by stable id (not list index) keeps the target
+            # consistent with the per-user filtered view the page renders,
+            # and prevents a restricted user from reaching a hidden iframe.
             proxy_path = path[len('/proxy/'):]
             parts = proxy_path.split('/', 1)
-            try:
-                iframe_idx = int(parts[0])
-            except (ValueError, IndexError):
-                self.send_json({'error': 'Invalid proxy path'}, 400)
+            iframe_id = parts[0]
+
+            user_record = config.get("users", {}).get(user, {})
+            visible_iframes, _ = filter_by_permissions(
+                config.get("iframes", []),
+                config.get("widgets", []),
+                user_record,
+            )
+            target_iframe = next(
+                (f for f in visible_iframes if f.get("id") == iframe_id), None
+            )
+            if target_iframe is None:
+                self.send_json({'error': 'Invalid iframe id'}, 404)
                 return
 
-            iframes = config.get("iframes", [])
-            if iframe_idx < 0 or iframe_idx >= len(iframes):
-                self.send_json({'error': 'Invalid iframe index'}, 404)
-                return
-
-            target_url = iframes[iframe_idx].get("url", "")
+            target_url = target_iframe.get("url", "")
             # Strip hash fragment - it's browser-only, not sent in HTTP requests
             if '#' in target_url:
                 target_url = target_url.split('#')[0]
@@ -10374,17 +10486,20 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             conn = None
             try:
                 import http.client
-                conn_host = parsed_target.hostname
-                conn_port = parsed_target.port or (443 if parsed_target.scheme == 'https' else 80)
 
-                if parsed_target.scheme == 'https':
-                    import ssl
-                    ctx = ssl.create_default_context()
-                    ctx.check_hostname = False
-                    ctx.verify_mode = ssl.CERT_NONE
-                    conn = http.client.HTTPSConnection(conn_host, conn_port, context=ctx, timeout=10)
-                else:
-                    conn = http.client.HTTPConnection(conn_host, conn_port, timeout=10)
+                def _open_conn(scheme, host, port):
+                    if scheme == 'https':
+                        import ssl
+                        ctx = ssl.create_default_context()
+                        ctx.check_hostname = False
+                        ctx.verify_mode = ssl.CERT_NONE
+                        return http.client.HTTPSConnection(host, port, context=ctx, timeout=10)
+                    return http.client.HTTPConnection(host, port, timeout=10)
+
+                conn_scheme = parsed_target.scheme or 'http'
+                conn_host = parsed_target.hostname
+                conn_port = parsed_target.port or (443 if conn_scheme == 'https' else 80)
+                conn = _open_conn(conn_scheme, conn_host, conn_port)
 
                 request_path = sub_path
                 if query_string:
@@ -10392,34 +10507,46 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
 
                 conn.request('GET', request_path, headers={
                     'Host': parsed_target.netloc,
-                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.8 Proxy)',
+                    'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.5.0 Proxy)',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Encoding': 'identity'
                 })
                 resp = conn.getresponse()
 
-                # Follow redirects (up to 5 hops)
+                # Follow redirects (up to 5 hops). Each absolute hop is
+                # re-validated against validate_local_ip so a local target
+                # can't bounce the proxy to an external host (SSRF), and the
+                # scheme is honored so an https redirect reconnects over TLS.
                 redirects = 0
                 while resp.status in (301, 302, 303, 307, 308) and redirects < 5:
                     redirect_url = resp.getheader('Location', '')
                     resp.read()  # drain body
-                    if redirect_url.startswith('http'):
-                        # Absolute redirect - re-parse
+                    if not redirect_url:
+                        break
+                    # Resolve protocol-relative Location (//host/path) against scheme
+                    if redirect_url.startswith('//'):
+                        redirect_url = f'{conn_scheme}:{redirect_url}'
+                    if redirect_url.startswith('http://') or redirect_url.startswith('https://'):
+                        if not validate_local_ip(redirect_url):
+                            self.send_json({'error': 'Redirect to non-local host blocked'}, 403)
+                            return
                         redir_parsed = urlparse(redirect_url)
                         request_path = redir_parsed.path or '/'
                         if redir_parsed.query:
                             request_path += '?' + redir_parsed.query
-                        # Reconnect if host changed
-                        if redir_parsed.hostname != conn_host or (redir_parsed.port or 80) != conn_port:
+                        new_scheme = redir_parsed.scheme
+                        new_host = redir_parsed.hostname
+                        new_port = redir_parsed.port or (443 if new_scheme == 'https' else 80)
+                        if new_host != conn_host or new_port != conn_port or new_scheme != conn_scheme:
                             conn.close()
-                            conn_host = redir_parsed.hostname
-                            conn_port = redir_parsed.port or 80
-                            conn = http.client.HTTPConnection(conn_host, conn_port, timeout=10)
+                            conn_scheme, conn_host, conn_port = new_scheme, new_host, new_port
+                            conn = _open_conn(conn_scheme, conn_host, conn_port)
                     else:
-                        request_path = redirect_url
+                        # Relative redirect on the same host
+                        request_path = redirect_url if redirect_url.startswith('/') else '/' + redirect_url
                     conn.request('GET', request_path, headers={
                         'Host': f'{conn_host}:{conn_port}',
-                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.4.8 Proxy)',
+                        'User-Agent': 'Mozilla/5.0 (Multi-Frames/1.5.0 Proxy)',
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                         'Accept-Encoding': 'identity'
                     })
@@ -10461,7 +10588,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
             except Exception as e:
-                server_logger.error(f"Proxy error for iframe {iframe_idx}: {e}")
+                server_logger.error(f"Proxy error for iframe {iframe_id}: {e}")
                 self.send_json({'error': f'Proxy request failed: {str(e)}'}, 502)
             finally:
                 if conn is not None:

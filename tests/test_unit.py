@@ -93,6 +93,15 @@ class EscapeHtmlTests(_MFTestBase):
     def test_ampersand_is_escaped_first(self):
         self.assertEqual(self.mf.escape_html("&lt;"), "&amp;lt;")
 
+    def test_single_quote_is_escaped(self):
+        self.assertEqual(self.mf.escape_html("O'Brien"), "O&#39;Brien")
+
+    def test_escape_js_string(self):
+        # Quotes and backslashes are backslash-escaped; </script> is broken up.
+        self.assertEqual(self.mf.escape_js_string("a'b\"c\\d"), "a\\'b\\\"c\\\\d")
+        self.assertEqual(self.mf.escape_js_string("</script>"), "<\\/script>")
+        self.assertEqual(self.mf.escape_js_string(None), "")
+
 
 class RateLimiterTests(_MFTestBase):
     def setUp(self):

@@ -235,6 +235,56 @@ class ServerIntegrationTests(unittest.TestCase):
         resp = self._get(f"/proxy/{hidden_id}/", cookie=session)
         self.assertEqual(resp.status, 404)
 
+    def test_static_branding_asset_served_with_cache_headers(self):
+        import base64 as _b64
+        mf = self.mf
+        png = _b64.b64encode(_b64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+            "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")).decode()
+        cfg = mf.load_config()
+        cfg.setdefault("branding", {})["logo"] = png
+        cfg["branding"]["logo_mime"] = "image/png"
+        mf.save_config(cfg)
+        resp = self._get("/static/logo")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.headers.get("Content-Type"), "image/png")
+        self.assertIn("max-age", resp.headers.get("Cache-Control", ""))
+        self.assertTrue(resp.headers.get("ETag"))
+        self.assertEqual(resp.read(), _b64.b64decode(png))
+
+    def test_static_asset_conditional_304(self):
+        import base64 as _b64
+        mf = self.mf
+        png = _b64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * 32).decode()
+        cfg = mf.load_config()
+        cfg.setdefault("branding", {})["favicon"] = png
+        cfg["branding"]["favicon_mime"] = "image/png"
+        mf.save_config(cfg)
+        first = self._get("/static/favicon")
+        etag = first.headers.get("ETag")
+        req = urllib.request.Request(self.server.base + "/static/favicon")
+        req.add_header("If-None-Match", etag)
+        try:
+            resp = urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as e:
+            resp = e
+        self.assertEqual(resp.status, 304)
+
+    def test_static_unknown_asset_404(self):
+        self.assertEqual(self._get("/static/does-not-exist").status, 404)
+
+    def test_response_gzipped_when_accepted(self):
+        import gzip as _gzip
+        login = self._post_form("/login", {"username": "admin", "password": "admin123"})
+        session = _extract_session(login.headers.get("Set-Cookie", ""))
+        req = urllib.request.Request(self.server.base + "/")
+        req.add_header("Accept-Encoding", "gzip")
+        req.add_header("Cookie", f"session={session}")
+        resp = urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(resp.headers.get("Content-Encoding"), "gzip")
+        body = _gzip.decompress(resp.read())
+        self.assertIn(b"<html", body.lower())
+
     def test_admin_always_sees_everything(self):
         """Even if the admin's own record has an empty allow-list, admin sees all."""
         mf = self.mf

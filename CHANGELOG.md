@@ -5,6 +5,19 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-07-07
+
+Performance release. Behavior is unchanged; responses are smaller and faster.
+
+### Performance
+- **In-memory config cache.** `load_config()` no longer re-reads and re-parses the JSON config (which can carry multi-MB base64 images) on every request. The parsed config is cached and only re-read when the file's `(mtime, size)` fingerprint changes; `save_config()` refreshes the cache. Callers still receive an independent deep copy, so in-place mutation before saving never leaks into the cache or other request threads.
+- **Cached generated CSS.** `generate_dynamic_styles()` rebuilt ~400 lines of CSS on every page render; the result is now cached and reused until the `appearance` settings change.
+- **gzip compression.** HTML and JSON responses over 1 KB are gzip-compressed when the client sends `Accept-Encoding: gzip`, with a `Vary: Accept-Encoding` header. HTML pages with inline scripts/styles shrink substantially.
+- **Branding images served as cacheable assets.** Logo, favicon, Apple/Android touch icons, and the background image are no longer base64-inlined into every HTML/CSS response. They are served once from `/static/<name>` with `Cache-Control: public, max-age=86400` and an `ETag` (honoring `If-None-Match` → 304), and referenced by a versioned URL (`/static/logo?v=<hash>`) so a changed image busts the cache. Admin-panel upload previews remain inline (admin-only, not on the hot path).
+
+### Notes
+- Fully backward-compatible: no config migration, no API changes. The config still stores the images as base64 (moving them out of the JSON entirely is tracked as a separate Phase 4 item); this release stops *re-embedding* them into every response.
+
 ## [1.6.0] - 2026-07-07
 
 Security-hardening release. No user-facing feature changes; existing accounts

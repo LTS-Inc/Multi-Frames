@@ -46,7 +46,7 @@ A deeper review with file:line references and severity grouping lives in
 
 ### Critical
 
-- [ ] **Cache config in memory** — `load_config()` reads and parses JSON from disk on every HTTP request (`multi_frames.py:9692`, `:9990`). Load once at startup, keep in memory, and reload only when the file's mtime changes.
+- [x] **Cache config in memory** — done in v1.6.1. `load_config()` caches the parsed dict keyed on the file's `(mtime, size)` and returns deep copies; `save_config()` refreshes the cache.
 
 - [x] **Thread-safe session storage** — done in v1.6.0. `sessions`, `failed_login_attempts`, and `_soundtrack_cache` are guarded by module-level `threading.Lock`s; a background thread sweeps expired entries.
 
@@ -54,15 +54,15 @@ A deeper review with file:line references and severity grouping lives in
 
 ### High
 
-- [ ] **Cache generated CSS** — `generate_dynamic_styles(config)` at `multi_frames.py:4744` rebuilds ~400 lines of CSS on every page render. Cache the output and invalidate only when appearance settings change.
+- [x] **Cache generated CSS** — done in v1.6.1. `generate_dynamic_styles()` caches its output keyed on the serialized `appearance` settings.
 
-- [ ] **Add gzip response compression** — No compression on any response. HTML pages with inline base64 images can be 10MB+. Check `Accept-Encoding` and gzip responses over 1KB.
+- [x] **Add gzip response compression** — done in v1.6.1. `send_html`/`send_json` gzip responses over 1 KB when `Accept-Encoding: gzip` is present, with `Vary: Accept-Encoding`.
 
-- [ ] **Serve images as separate cacheable assets** — Logo, favicon, background are base64-embedded inline in every HTML response (`multi_frames.py:4676-4696`). Serve at `/static/logo.png` etc. with `Cache-Control` and `ETag` headers.
+- [x] **Serve images as separate cacheable assets** — done in v1.6.1. Logo/favicon/icons/background are served from `/static/<name>` with `Cache-Control: public, max-age=86400`, an `ETag` (304 on `If-None-Match`), and versioned URLs for cache-busting.
 
 ### Medium
 
-- [ ] **Add HTTP caching for static content** — All responses set `Cache-Control: no-store`. CSS/JS/images should use `Cache-Control: public, max-age=86400` with content hashing for cache-busting.
+- [x] **Add HTTP caching for static content** — done in v1.6.1 for branding assets (`/static/*` uses `Cache-Control: public, max-age=86400` + `ETag` + versioned URLs). Dynamic HTML/JSON stays `no-store` by design.
 
 - [ ] **Connection pooling in proxy** — The `/proxy/` handler creates a new `HTTPConnection` per request (`multi_frames.py:9841`). Reuse connections for repeated requests to the same target.
 

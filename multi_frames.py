@@ -295,7 +295,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 VERSION_DATE = "2026-07-07"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -312,12 +312,14 @@ import json
 import hashlib
 import secrets
 import os
+import copy
 import tempfile
 import sys
 import re
 import argparse
 import ipaddress
 import base64
+import gzip
 import socket
 import urllib.request
 import urllib.error
@@ -3068,23 +3070,65 @@ def _ensure_ids(cfg):
     return changed
 
 
-def load_config():
-    """Load configuration from JSON file or create default."""
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                cfg = json.load(f)
-            if _ensure_ids(cfg):
-                save_config(cfg)
-            return cfg
-        except (json.JSONDecodeError, IOError):
-            pass
-    default_copy = json.loads(json.dumps(DEFAULT_CONFIG))
-    _ensure_ids(default_copy)
-    save_config(default_copy)
-    return default_copy
-
 _config_lock = _threading.Lock()
+
+# In-memory config cache. Parsing the JSON (which can carry multi-MB base64
+# images) on every request is wasteful, so we keep the parsed dict and only
+# re-read when the file's (mtime, size) fingerprint changes. Callers always
+# receive a deep copy, so in-place mutation before save_config() never leaks
+# into the cache or into other request threads.
+_config_cache = None
+_config_cache_key = None      # (st_mtime, st_size) of the file the cache reflects
+_config_cache_lock = _threading.Lock()
+
+def _config_file_key():
+    try:
+        st = os.stat(CONFIG_FILE)
+        return (st.st_mtime, st.st_size)
+    except OSError:
+        return None
+
+def load_config():
+    """Load configuration, using an in-memory cache keyed on the file's
+    (mtime, size). Returns a deep copy the caller may freely mutate."""
+    global _config_cache, _config_cache_key
+    need_save = False
+    with _config_cache_lock:
+        key = _config_file_key()
+        if _config_cache is not None and key is not None and key == _config_cache_key:
+            return copy.deepcopy(_config_cache)
+
+        cfg = None
+        if key is not None:
+            try:
+                with open(CONFIG_FILE, 'r') as f:
+                    cfg = json.load(f)
+            except (json.JSONDecodeError, IOError, OSError):
+                cfg = None
+
+        if cfg is None:
+            cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+            need_save = True
+
+        if _ensure_ids(cfg):
+            need_save = True
+
+        if not need_save:
+            _config_cache = copy.deepcopy(cfg)
+            _config_cache_key = key
+            return copy.deepcopy(cfg)
+
+    # Persist (default created or IDs backfilled). save_config refreshes the
+    # cache under its own lock, so this must run outside _config_cache_lock.
+    save_config(cfg)
+    return copy.deepcopy(cfg)
+
+def _update_config_cache(config):
+    """Refresh the in-memory config cache to reflect a just-written file."""
+    global _config_cache, _config_cache_key
+    with _config_cache_lock:
+        _config_cache = copy.deepcopy(config)
+        _config_cache_key = _config_file_key()
 
 def save_config(config):
     """
@@ -3115,6 +3159,8 @@ def save_config(config):
                         os.remove(tmp_path)
                     except OSError:
                         pass
+        # Keep the in-memory cache consistent with what we just wrote.
+        _update_config_cache(config)
         return True, None
     except PermissionError:
         error_msg = f"Permission denied: Cannot write to '{CONFIG_FILE}'. Check file permissions or run: chmod 666 {CONFIG_FILE}"
@@ -3529,6 +3575,39 @@ def escape_js_string(text):
             .replace("\n", "\\n")
             .replace("\r", "\\r")
             .replace("</", "<\\/"))
+
+# Branding/background images are stored base64 in config. Rather than inline
+# them (often multiple MB) into every HTML/CSS response, they are served once
+# from /static/<name> with long-lived caching, and referenced by URL.
+_BRANDING_ASSETS = {
+    # name -> (config section, data key, mime key)
+    'logo':             ('branding', 'logo', 'logo_mime'),
+    'favicon':          ('branding', 'favicon', 'favicon_mime'),
+    'apple-touch-icon': ('branding', 'apple_touch_icon', 'apple_touch_icon_mime'),
+    'android-icon':     ('branding', 'android_icon', 'android_icon_mime'),
+    'background':       ('background', 'image', 'image_mime'),
+}
+
+def get_branding_asset(config, name):
+    """Return (base64_data, mime) for a named branding asset, or (None, None)."""
+    spec = _BRANDING_ASSETS.get(name)
+    if not spec:
+        return None, None
+    section, data_key, mime_key = spec
+    if section == 'branding':
+        src = config.get('branding', {}) or {}
+    else:
+        src = (config.get('appearance', {}) or {}).get('background', {}) or {}
+    return src.get(data_key), src.get(mime_key)
+
+def branding_asset_url(config, name):
+    """Return a cacheable /static URL (with a content version hash for cache
+    busting) for a branding asset, or None if the asset isn't set."""
+    data, _mime = get_branding_asset(config, name)
+    if not data:
+        return None
+    ver = hashlib.sha256(data.encode('utf-8')).hexdigest()[:12]
+    return f'/static/{name}?v={ver}'
 
 def parse_multipart(content_type, body):
     """Parse multipart/form-data for file uploads."""
@@ -4630,9 +4709,35 @@ footer a:hover {
 }
 """
 
+_css_cache = {"key": None, "css": None}
+_css_cache_lock = _threading.Lock()
+
 def generate_dynamic_styles(config):
-    """Generate CSS variables from config."""
+    """Generate CSS variables from config.
+
+    The output depends only on ``config['appearance']``, which changes rarely,
+    so the ~400-line result is cached and reused until those settings change.
+    """
     appearance = config.get("appearance", {})
+    try:
+        cache_key = json.dumps(appearance, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        cache_key = None
+    if cache_key is not None:
+        with _css_cache_lock:
+            if _css_cache["key"] == cache_key:
+                return _css_cache["css"]
+
+    css = _generate_dynamic_styles(config, appearance)
+
+    if cache_key is not None:
+        with _css_cache_lock:
+            _css_cache["key"] = cache_key
+            _css_cache["css"] = css
+    return css
+
+def _generate_dynamic_styles(config, appearance):
+    """Build the CSS string (uncached)."""
     colors = appearance.get("colors", {})
     bg = appearance.get("background", {})
     header = appearance.get("header", {})
@@ -4722,9 +4827,10 @@ def generate_dynamic_styles(config):
     elif bg_type == "image" and bg.get("image"):
         size = bg.get("image_size", "cover")
         opacity = bg.get("image_opacity", 100) / 100
+        bg_url = branding_asset_url(config, 'background')
         css_vars += f"""
         .bg-overlay {{
-            background-image: url('data:{bg.get("image_mime", "image/png")};base64,{bg["image"]}');
+            background-image: url('{bg_url}');
             background-size: {size};
             background-position: center;
             background-repeat: {'repeat' if size == 'repeat' else 'no-repeat'};
@@ -4969,31 +5075,33 @@ def render_page(title, content, user=None, config=None):
     else:
         nav_items = '<a href="/login">Login</a>'
     
-    # Build logo HTML
+    # Build logo HTML — served from /static so the (often large) image isn't
+    # re-embedded into every page and can be browser-cached.
     branding = config.get("branding", {})
-    logo_html = ""
-    if branding.get("logo") and branding.get("logo_mime"):
-        logo_html = f'<img src="data:{branding["logo_mime"]};base64,{branding["logo"]}" alt="Logo">'
+    logo_url = branding_asset_url(config, 'logo')
+    if logo_url:
+        logo_html = f'<img src="{logo_url}" alt="Logo">'
     else:
         logo_html = '<span>◈</span>'
-    
+
     # Build favicon HTML
-    favicon_html = ""
-    if branding.get("favicon") and branding.get("favicon_mime"):
-        favicon_html = f'<link rel="icon" type="{branding["favicon_mime"]}" href="data:{branding["favicon_mime"]};base64,{branding["favicon"]}">'
+    favicon_url = branding_asset_url(config, 'favicon')
+    if favicon_url:
+        favicon_html = f'<link rel="icon" type="{branding["favicon_mime"]}" href="{favicon_url}">'
     else:
         favicon_html = '<link rel="icon" href="data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'><text y=\'.9em\' font-size=\'90\'>◈</text></svg>">'
-    
+
     # Build Apple Touch Icon HTML (for iOS "Add to Home Screen")
     apple_touch_icon_html = ""
-    if branding.get("apple_touch_icon") and branding.get("apple_touch_icon_mime"):
-        apple_touch_icon_html = f'<link rel="apple-touch-icon" href="data:{branding["apple_touch_icon_mime"]};base64,{branding["apple_touch_icon"]}">'
+    apple_icon_url = branding_asset_url(config, 'apple-touch-icon')
+    if apple_icon_url:
+        apple_touch_icon_html = f'<link rel="apple-touch-icon" href="{apple_icon_url}">'
 
     # Build Android Icon HTML (for Android "Add to Home Screen")
     android_icon_html = ""
-    if branding.get("android_icon") and branding.get("android_icon_mime"):
-        # Android uses a web manifest with icon reference
-        android_icon_html = f'<link rel="icon" sizes="192x192" href="data:{branding["android_icon_mime"]};base64,{branding["android_icon"]}">'
+    android_icon_url = branding_asset_url(config, 'android-icon')
+    if android_icon_url:
+        android_icon_html = f'<link rel="icon" sizes="192x192" href="{android_icon_url}">'
 
     # Header custom text
     header_subtitle = ""
@@ -10301,6 +10409,22 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             "base-uri 'self'"
         )
 
+    def _accepts_gzip(self):
+        return 'gzip' in self.headers.get('Accept-Encoding', '').lower()
+
+    def _write_body(self, body_bytes):
+        """gzip the body when the client accepts it and it's worth compressing,
+        emit Content-Encoding/Length/Vary headers, and write it. Must be called
+        after status + content-type headers are sent but before end_headers()."""
+        if len(body_bytes) > 1024 and self._accepts_gzip():
+            body_bytes = gzip.compress(body_bytes)
+            self.send_header('Content-Encoding', 'gzip')
+        self.send_header('Vary', 'Accept-Encoding')
+        self.send_header('Content-Length', str(len(body_bytes)))
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(body_bytes)
+
     def send_html(self, html, status=200):
         """Send an HTML response."""
         # Tunnel-forwarded pages are embedded in the cloud portal iframe, so
@@ -10310,8 +10434,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
         self._send_security_headers(framing=framing)
-        self.end_headers()
-        self.wfile.write(html.encode('utf-8'))
+        self._write_body(html.encode('utf-8'))
 
     def send_json(self, data, status=200):
         """Send a JSON response."""
@@ -10321,9 +10444,37 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.end_headers()
-        self.wfile.write(body.encode('utf-8'))
+        self._write_body(body.encode('utf-8'))
     
+    def serve_branding_asset(self, config, name):
+        """Serve a base64-stored branding image with long-lived caching and an
+        ETag, honoring If-None-Match for 304s."""
+        b64, mime = get_branding_asset(config, name)
+        if not b64:
+            self.send_json({'error': 'Not found'}, 404)
+            return
+        etag = '"' + hashlib.sha256(b64.encode('utf-8')).hexdigest()[:16] + '"'
+        if self.headers.get('If-None-Match') == etag:
+            self.send_response(304)
+            self.send_header('ETag', etag)
+            self.send_header('Cache-Control', 'public, max-age=86400')
+            self.end_headers()
+            return
+        try:
+            raw = base64.b64decode(b64)
+        except Exception:
+            self.send_json({'error': 'Invalid asset'}, 500)
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', mime or 'application/octet-stream')
+        self.send_header('Cache-Control', 'public, max-age=86400')
+        self.send_header('ETag', etag)
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Content-Length', str(len(raw)))
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(raw)
+
     def _handle_request_error(self, error, method):
         """Handle and log request errors gracefully."""
         error_msg = str(error)
@@ -10429,7 +10580,12 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.redirect('/')
             else:
                 self.send_html(render_login_page())
-        
+
+        elif path.startswith('/static/'):
+            # Cacheable branding assets (logo, favicon, icons, background).
+            # Public so the login page and browser icons load pre-auth.
+            self.serve_branding_asset(config, path[len('/static/'):])
+
         elif path == '/forgot-password':
             if user:
                 self.redirect('/')

@@ -148,6 +148,22 @@ class ConfigRoundTripTests(_MFTestBase):
         loaded = self.mf.load_config()
         self.assertEqual(loaded.get("sentinel"), "round-trip")
 
+    def test_cache_returns_independent_copies(self):
+        # Mutating a loaded config must not leak into the cache or into a
+        # subsequent load (each caller gets its own deep copy).
+        cfg = self.mf.load_config()
+        cfg.setdefault("settings", {})["grid_columns"] = 99
+        cfg.setdefault("iframes", []).append({"id": "temp1234", "name": "scratch"})
+        again = self.mf.load_config()
+        self.assertNotEqual(again.get("settings", {}).get("grid_columns"), 99)
+        self.assertFalse(any(f.get("id") == "temp1234" for f in again.get("iframes", [])))
+
+    def test_cache_reflects_saved_changes(self):
+        cfg = self.mf.load_config()
+        cfg["sentinel_cache"] = "v2"
+        self.mf.save_config(cfg)
+        self.assertEqual(self.mf.load_config().get("sentinel_cache"), "v2")
+
 
 class SessionTests(_MFTestBase):
     def setUp(self):

@@ -215,12 +215,12 @@ Remaining low-severity UI items (deferred, not blocking): buttons-editor `:empty
 
 Full read-modify-write atomicity of the server `config` across concurrent handlers (load→modify→save under one lock) is **not** yet in place — only the write itself is atomic. Serializing whole handler cycles is a larger refactor deferred alongside the Phase 3 in-memory config cache.
 
-### Phase 3 — Performance
-Mostly already scoped in TODO.md; sequence after correctness:
-- In-memory config cache with mtime invalidation; cached generated CSS.
-- Serve logo/favicon/background as separate cacheable `/static/` assets with `ETag`; move branding images out of the config JSON.
-- gzip responses > 1 KB; `Cache-Control` for static content.
-- Proxy connection reuse; shorter/configurable Soundtrack upstream timeout.
+### Phase 3 — Performance — ✅ mostly DONE (v1.6.1)
+- ✅ In-memory config cache keyed on file `(mtime, size)`, returning deep copies; cache refreshed on `save_config`.
+- ✅ Cached generated CSS (invalidated when `appearance` settings change).
+- ✅ gzip for HTML/JSON responses > 1 KB with `Vary: Accept-Encoding`.
+- ✅ Serve logo/favicon/icons/background from `/static/<name>` with `Cache-Control` + `ETag`/304 and versioned URLs. (Moving the base64 images *out of the config JSON* entirely remains a Phase 4 item — this release stops re-embedding them into every response.)
+- ⏳ Not yet done: proxy connection reuse; shorter/configurable Soundtrack upstream timeout (low impact — deferred).
 
 ### Phase 4 — New features & platform
 Higher-value additions once the base is solid:

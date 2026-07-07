@@ -29,26 +29,36 @@ class _MFTestBase(unittest.TestCase):
 
 
 class PasswordHashingTests(_MFTestBase):
-    def test_hash_is_deterministic(self):
-        self.assertEqual(self.mf.hash_password("hunter2"),
-                         self.mf.hash_password("hunter2"))
+    def test_hash_is_salted_and_verifies(self):
+        # PBKDF2 with a random salt: two hashes of the same password differ,
+        # but both verify.
+        h1 = self.mf.hash_password("hunter2")
+        h2 = self.mf.hash_password("hunter2")
+        self.assertNotEqual(h1, h2)
+        self.assertTrue(self.mf.verify_password("hunter2", h1))
+        self.assertTrue(self.mf.verify_password("hunter2", h2))
 
-    def test_hash_changes_with_input(self):
-        self.assertNotEqual(self.mf.hash_password("a"),
-                            self.mf.hash_password("b"))
-
-    def test_hash_is_hex_sha256(self):
+    def test_hash_format(self):
         h = self.mf.hash_password("x")
-        self.assertEqual(len(h), 64)
-        int(h, 16)  # must parse as hex
+        self.assertTrue(h.startswith("pbkdf2_sha256$"))
+        parts = h.split("$")
+        self.assertEqual(len(parts), 4)
+        self.assertEqual(int(parts[1]), self.mf.PBKDF2_ITERATIONS)
 
-    def test_known_default_admin_hash(self):
-        # Regression: changing the hash scheme without a migration would
-        # lock every deployed admin out of their server.
-        self.assertEqual(
-            self.mf.hash_password("admin123"),
-            "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
-        )
+    def test_wrong_password_fails(self):
+        h = self.mf.hash_password("correct")
+        self.assertFalse(self.mf.verify_password("wrong", h))
+
+    def test_legacy_sha256_still_verifies(self):
+        # A pre-1.6.0 bare SHA-256 hash must still authenticate so existing
+        # accounts aren't locked out before migration.
+        import hashlib
+        legacy = hashlib.sha256("admin123".encode()).hexdigest()
+        self.assertEqual(len(legacy), 64)
+        self.assertTrue(self.mf.verify_password("admin123", legacy))
+        self.assertFalse(self.mf.verify_password("nope", legacy))
+        self.assertTrue(self.mf.needs_rehash(legacy))
+        self.assertFalse(self.mf.needs_rehash(self.mf.hash_password("x")))
 
 
 class LocalIpValidationTests(_MFTestBase):

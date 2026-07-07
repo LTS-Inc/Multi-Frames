@@ -295,7 +295,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 VERSION_DATE = "2026-07-07"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -312,6 +312,7 @@ import json
 import hashlib
 import secrets
 import os
+import tempfile
 import sys
 import re
 import argparse
@@ -2998,47 +2999,54 @@ def apply_network_config(config, network_settings):
     else:
         return apply_network_linux(interface, mode, ip_addr, subnet, gateway, dns_primary, dns_secondary)
 
-# In-memory session storage
+# In-memory session storage. The server is threaded (ThreadingMixIn), so all
+# access to these shared dicts is guarded by module-level locks.
+import threading as _threading
 sessions = {}
+_sessions_lock = _threading.Lock()
 
 # Login rate limiting
 failed_login_attempts = {}  # IP -> {'count': int, 'lockout_until': datetime}
+_login_lock = _threading.Lock()
 MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCKOUT_MINUTES = 15
 
 def check_login_allowed(client_ip):
     """Check if login attempts are allowed from this IP."""
-    if client_ip not in failed_login_attempts:
+    with _login_lock:
+        if client_ip not in failed_login_attempts:
+            return True, None
+
+        attempt_data = failed_login_attempts[client_ip]
+        lockout_until = attempt_data.get('lockout_until')
+
+        if lockout_until and datetime.now() < lockout_until:
+            remaining = (lockout_until - datetime.now()).seconds // 60 + 1
+            return False, f"Too many failed attempts. Try again in {remaining} minute(s)."
+
+        # Lockout expired, reset
+        if lockout_until and datetime.now() >= lockout_until:
+            del failed_login_attempts[client_ip]
+
         return True, None
-    
-    attempt_data = failed_login_attempts[client_ip]
-    lockout_until = attempt_data.get('lockout_until')
-    
-    if lockout_until and datetime.now() < lockout_until:
-        remaining = (lockout_until - datetime.now()).seconds // 60 + 1
-        return False, f"Too many failed attempts. Try again in {remaining} minute(s)."
-    
-    # Lockout expired, reset
-    if lockout_until and datetime.now() >= lockout_until:
-        del failed_login_attempts[client_ip]
-    
-    return True, None
 
 def record_failed_login(client_ip):
     """Record a failed login attempt."""
-    if client_ip not in failed_login_attempts:
-        failed_login_attempts[client_ip] = {'count': 0, 'lockout_until': None}
-    
-    failed_login_attempts[client_ip]['count'] += 1
-    
-    if failed_login_attempts[client_ip]['count'] >= MAX_LOGIN_ATTEMPTS:
-        failed_login_attempts[client_ip]['lockout_until'] = datetime.now() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
-        server_logger.warning(f"IP {client_ip} locked out after {MAX_LOGIN_ATTEMPTS} failed login attempts")
+    with _login_lock:
+        if client_ip not in failed_login_attempts:
+            failed_login_attempts[client_ip] = {'count': 0, 'lockout_until': None}
+
+        failed_login_attempts[client_ip]['count'] += 1
+
+        if failed_login_attempts[client_ip]['count'] >= MAX_LOGIN_ATTEMPTS:
+            failed_login_attempts[client_ip]['lockout_until'] = datetime.now() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+            server_logger.warning(f"IP {client_ip} locked out after {MAX_LOGIN_ATTEMPTS} failed login attempts")
 
 def clear_failed_logins(client_ip):
     """Clear failed login attempts after successful login."""
-    if client_ip in failed_login_attempts:
-        del failed_login_attempts[client_ip]
+    with _login_lock:
+        if client_ip in failed_login_attempts:
+            del failed_login_attempts[client_ip]
 
 # =============================================================================
 # Utility Functions
@@ -3076,15 +3084,37 @@ def load_config():
     save_config(default_copy)
     return default_copy
 
+_config_lock = _threading.Lock()
+
 def save_config(config):
     """
-    Save configuration to JSON file.
-    Returns tuple: (success: bool, error_message: str or None)
-    For backward compatibility, also works if return value is ignored.
+    Save configuration to JSON file atomically.
+
+    Writes to a temp file then os.replace()s it into place under a lock, so a
+    crash or concurrent writer can't leave a truncated/corrupt config. The file
+    is created with 0600 permissions since it holds password hashes and tokens.
+    Returns tuple: (success: bool, error_message: str or None).
     """
     try:
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=2)
+        with _config_lock:
+            dir_name = os.path.dirname(os.path.abspath(CONFIG_FILE)) or '.'
+            fd, tmp_path = tempfile.mkstemp(prefix='.mfcfg-', dir=dir_name)
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(config, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                try:
+                    os.chmod(tmp_path, 0o600)
+                except OSError:
+                    pass
+                os.replace(tmp_path, CONFIG_FILE)
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
         return True, None
     except PermissionError:
         error_msg = f"Permission denied: Cannot write to '{CONFIG_FILE}'. Check file permissions or run: chmod 666 {CONFIG_FILE}"
@@ -3114,6 +3144,7 @@ def save_config_safe(config):
 SOUNDTRACK_API_URL = "https://api.soundtrackyourbrand.com/v2"
 SOUNDTRACK_CACHE_TTL = 8  # seconds to cache now-playing per zone
 _soundtrack_cache = {}    # zone_id -> (timestamp, payload)
+_soundtrack_lock = _threading.Lock()
 
 SOUNDTRACK_ZONES_QUERY = """
 query Me {
@@ -3215,27 +3246,112 @@ def check_config_writable():
     except Exception:
         return False
 
+PBKDF2_ITERATIONS = 600000
+
 def hash_password(password):
-    """Hash a password using SHA-256."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash a password with PBKDF2-HMAC-SHA256 and a per-hash random salt.
+
+    Format: ``pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>``.
+    """
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, PBKDF2_ITERATIONS)
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt.hex()}${dk.hex()}"
+
+def verify_password(password, stored_hash):
+    """Verify a password against a stored hash.
+
+    Accepts the current PBKDF2 format and legacy bare SHA-256 hashes (64 hex
+    chars) so existing accounts keep working until they are migrated on next
+    successful login. Comparison is constant-time.
+    """
+    if not stored_hash:
+        return False
+    if stored_hash.startswith('pbkdf2_sha256$'):
+        try:
+            _, iter_s, salt_hex, hash_hex = stored_hash.split('$', 3)
+            iterations = int(iter_s)
+            salt = bytes.fromhex(salt_hex)
+            expected = bytes.fromhex(hash_hex)
+        except (ValueError, TypeError):
+            return False
+        dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
+        return secrets.compare_digest(dk, expected)
+    # Legacy bare SHA-256 (pre-1.6.0). Migrated to PBKDF2 on next login.
+    legacy = hashlib.sha256(password.encode('utf-8')).hexdigest()
+    return secrets.compare_digest(legacy, stored_hash)
+
+def needs_rehash(stored_hash):
+    """True if the stored hash is a legacy format that should be upgraded."""
+    return not (stored_hash or '').startswith('pbkdf2_sha256$')
+
+# Precomputed dummy hash so a login attempt for an unknown user still runs a
+# PBKDF2 pass, keeping timing consistent with a real user (anti-enumeration).
+_DUMMY_PASSWORD_HASH = hash_password(secrets.token_hex(16))
 
 def create_session(username):
     """Create a new session for a user."""
     session_id = secrets.token_hex(32)
-    sessions[session_id] = {
-        "username": username,
-        "expires": datetime.now() + timedelta(hours=SESSION_TIMEOUT_HOURS)
-    }
+    with _sessions_lock:
+        sessions[session_id] = {
+            "username": username,
+            "expires": datetime.now() + timedelta(hours=SESSION_TIMEOUT_HOURS)
+        }
     return session_id
 
 def get_session(session_id):
     """Get session data if valid."""
-    if session_id in sessions:
-        session = sessions[session_id]
-        if datetime.now() < session["expires"]:
-            return session
-        del sessions[session_id]
+    with _sessions_lock:
+        session = sessions.get(session_id)
+        if session:
+            if datetime.now() < session["expires"]:
+                return session
+            del sessions[session_id]
     return None
+
+def destroy_session(session_id):
+    """Explicitly remove a session (used on logout)."""
+    if not session_id:
+        return
+    with _sessions_lock:
+        sessions.pop(session_id, None)
+
+def sweep_expired_state():
+    """Remove expired sessions and stale login-lockout entries. Called
+    periodically by a background thread so these dicts don't grow unbounded
+    under a botnet rotating source IPs."""
+    now = datetime.now()
+    with _sessions_lock:
+        expired = [sid for sid, s in sessions.items() if now >= s["expires"]]
+        for sid in expired:
+            del sessions[sid]
+    with _login_lock:
+        stale = [ip for ip, d in failed_login_attempts.items()
+                 if d.get('lockout_until') and now >= d['lockout_until']]
+        for ip in stale:
+            del failed_login_attempts[ip]
+    return len(expired)
+
+_sweeper_started = False
+_sweeper_lock = _threading.Lock()
+
+def start_state_sweeper(interval_seconds=300):
+    """Start a daemon thread that periodically sweeps expired in-memory state.
+    Idempotent — safe to call across server auto-restarts."""
+    global _sweeper_started
+    with _sweeper_lock:
+        if _sweeper_started:
+            return
+        _sweeper_started = True
+
+    def _loop():
+        while True:
+            time_module.sleep(interval_seconds)
+            try:
+                sweep_expired_state()
+            except Exception as e:
+                server_logger.debug(f"State sweep error: {e}")
+
+    _threading.Thread(target=_loop, daemon=True, name="state-sweeper").start()
 
 def validate_local_ip(url):
     """Validate that a URL points to a local/private IP address."""
@@ -10153,14 +10269,50 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 return session['username']
         return None
     
+    def _cookie_secure_suffix(self):
+        """'; Secure' when the request arrived over TLS (directly or via a
+        trusted reverse proxy), otherwise '' so cookies still work on plain
+        LAN/kiosk HTTP."""
+        if self.headers.get('X-Forwarded-Proto', '').lower() == 'https':
+            return '; Secure'
+        return ''
+
+    def _send_security_headers(self, framing=True):
+        """Emit baseline security headers. When ``framing`` is False the
+        anti-framing header is omitted (used for tunnel-forwarded responses
+        that are legitimately embedded in the cloud portal's iframe)."""
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Referrer-Policy', 'same-origin')
+        if framing:
+            self.send_header('X-Frame-Options', 'SAMEORIGIN')
+        # Permissive CSP: the app relies on inline styles/scripts and embeds
+        # arbitrary iframe URLs; the weather widget calls the open-meteo API.
+        # This still blocks plugins and restricts base URIs.
+        self.send_header(
+            'Content-Security-Policy',
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https:; "
+            "frame-src *; "
+            "font-src 'self' data:; "
+            "object-src 'none'; "
+            "base-uri 'self'"
+        )
+
     def send_html(self, html, status=200):
         """Send an HTML response."""
+        # Tunnel-forwarded pages are embedded in the cloud portal iframe, so
+        # they must not send an anti-framing header.
+        framing = self.headers.get('X-Tunnel-Forwarded') != '1'
         self.send_response(status)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
+        self._send_security_headers(framing=framing)
         self.end_headers()
         self.wfile.write(html.encode('utf-8'))
-    
+
     def send_json(self, data, status=200):
         """Send a JSON response."""
         import json as json_mod
@@ -10168,6 +10320,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
         self.end_headers()
         self.wfile.write(body.encode('utf-8'))
     
@@ -10209,9 +10362,9 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(302)
         self.send_header('Location', location)
         if set_cookie:
-            self.send_header('Set-Cookie', f'session={set_cookie}; Path=/; HttpOnly; SameSite=Strict')
+            self.send_header('Set-Cookie', f'session={set_cookie}; Path=/; HttpOnly; SameSite=Strict{self._cookie_secure_suffix()}')
         if clear_cookie:
-            self.send_header('Set-Cookie', 'session=; Path=/; HttpOnly; Max-Age=0')
+            self.send_header('Set-Cookie', f'session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{self._cookie_secure_suffix()}')
         self.end_headers()
     
     def read_post_data(self):
@@ -10284,6 +10437,10 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_html(render_forgot_password_page())
         
         elif path == '/logout':
+            # Invalidate the session server-side, not just the cookie.
+            cookie = SimpleCookie(self.headers.get('Cookie', ''))
+            if 'session' in cookie:
+                destroy_session(cookie['session'].value)
             self.redirect('/login', clear_cookie=True)
         
         elif path == '/help':
@@ -10412,7 +10569,8 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({'success': False, 'error': 'zone required'})
                 return
             now = time_module.time()
-            cached = _soundtrack_cache.get(zone)
+            with _soundtrack_lock:
+                cached = _soundtrack_cache.get(zone)
             if cached and (now - cached[0]) < SOUNDTRACK_CACHE_TTL:
                 self.send_json(cached[1])
                 return
@@ -10433,7 +10591,8 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 'artist': artists,
                 'album_art': ((track.get('album') or {}).get('image') or {}).get('url', ''),
             }
-            _soundtrack_cache[zone] = (now, payload)
+            with _soundtrack_lock:
+                _soundtrack_cache[zone] = (now, payload)
             self.send_json(payload)
 
         elif path.startswith('/proxy/'):
@@ -10650,13 +10809,36 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self._handle_request_error(e, 'POST')
     
+    def _csrf_ok(self):
+        """CSRF defense for state-changing POSTs.
+
+        The session cookie is SameSite=Strict, so a cross-site request never
+        carries it and can't act as the user. As defense-in-depth we also
+        reject POSTs whose Origin/Referer names a different host than the one
+        being addressed. Tunnel-forwarded requests are authenticated by the
+        tunnel layer and legitimately originate from the cloud portal, so they
+        are exempt. Requests that send neither header are allowed (some CLI
+        clients omit them) and rely on the SameSite cookie as backstop.
+        """
+        if self.headers.get('X-Tunnel-Forwarded') == '1':
+            return True
+        host = self.headers.get('Host', '')
+        for header in ('Origin', 'Referer'):
+            value = self.headers.get(header)
+            if value:
+                try:
+                    return urlparse(value).netloc == host
+                except Exception:
+                    return False
+        return True
+
     def _handle_post(self):
         """Internal POST handler."""
         user = self.get_session_user()
         config = load_config()
         path = self.path.split('?')[0]
         raw_data = self.read_post_data()
-        
+
         # Handle multipart vs regular form data
         if isinstance(raw_data, dict) and 'fields' in raw_data:
             data = raw_data['fields']
@@ -10664,7 +10846,13 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
         else:
             data = raw_data
             files = {}
-        
+
+        # CSRF check for all state-changing POSTs.
+        if not self._csrf_ok():
+            server_logger.warning(f"Rejected cross-origin POST to {path}")
+            self.send_json({'error': 'Cross-origin request blocked'}, 403)
+            return
+
         if path == '/login':
             client_ip = self.client_address[0]
             
@@ -10677,13 +10865,18 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             username = data.get('username', '')
             password = data.get('password', '')
             user_data = config["users"].get(username)
-            
-            # Use constant-time comparison to prevent timing attacks
-            password_hash = hash_password(password)
-            stored_hash = user_data["password_hash"] if user_data else hash_password("dummy_password_to_prevent_timing")
-            
-            if user_data and secrets.compare_digest(password_hash, stored_hash):
+
+            # Always run a PBKDF2 verification (dummy hash for unknown users)
+            # so timing doesn't reveal whether the username exists.
+            stored_hash = user_data["password_hash"] if user_data else _DUMMY_PASSWORD_HASH
+
+            if user_data and verify_password(password, stored_hash):
                 clear_failed_logins(client_ip)
+                # Transparently upgrade legacy SHA-256 hashes to PBKDF2.
+                if needs_rehash(stored_hash):
+                    config["users"][username]["password_hash"] = hash_password(password)
+                    save_config(config)
+                    server_logger.info(f"Migrated password hash to PBKDF2 for user: {username}")
                 session_id = create_session(username)
                 server_logger.info(f"Successful login for user: {username}")
                 self.redirect('/', set_cookie=session_id)
@@ -10859,7 +11052,8 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json({'success': False, 'error': 'Invalid volume'})
                     return
             ok, result = soundtrack_graphql(token, SOUNDTRACK_MUTATIONS[action], variables)
-            _soundtrack_cache.pop(zone, None)  # force a fresh poll next time
+            with _soundtrack_lock:
+                _soundtrack_cache.pop(zone, None)  # force a fresh poll next time
             if ok:
                 server_logger.info(f"Soundtrack {action} on zone {zone}", extra=user)
                 self.send_json({'success': True})
@@ -11415,7 +11609,8 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             apply_soundtrack_settings(config, enabled, token)
             save_config(config)
             # Invalidate cached now-playing so re-config takes effect immediately.
-            _soundtrack_cache.clear()
+            with _soundtrack_lock:
+                _soundtrack_cache.clear()
             self.send_html(render_admin_page(user, config, message="Soundtrack settings saved"))
 
         elif path == '/admin/widget/add':
@@ -12629,8 +12824,8 @@ def print_banner(args, config, use_color=True):
     mdns_enabled = config.get("network", {}).get("mdns", {}).get("enabled", False)
     mdns_hostname = config.get("network", {}).get("mdns", {}).get("hostname", "multi-frames")
     
-    # Check if default password
-    default_pw = config.get("users", {}).get("admin", {}).get("password_hash") == hashlib.sha256("admin123".encode()).hexdigest()
+    # Check if default password (works for both legacy and PBKDF2 hashes)
+    default_pw = verify_password("admin123", config.get("users", {}).get("admin", {}).get("password_hash", ""))
     
     # Count configured items
     iframe_count = len(config.get("iframes", []))
@@ -12733,7 +12928,10 @@ def main():
 
     # Print banner
     print_banner(args, config, use_color)
-    
+
+    # Background cleanup of expired sessions / login-lockout entries
+    start_state_sweeper()
+
     # Auto-restart settings
     max_restarts = 10
     restart_count = 0

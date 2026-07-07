@@ -67,6 +67,13 @@ class WorkerStaticChecks(unittest.TestCase):
     def test_oauth_callback_validates_state(self):
         self.assertIn("oauth_state", self.src)
 
+    def test_json_parsing_is_guarded(self):
+        # Request bodies go through the readJson helper, not a bare
+        # request.json() that can reject an un-awaited promise.
+        self.assertIn("async function readJson", self.src)
+        # The only bare request.json() left is inside the helper itself.
+        self.assertEqual(self.src.count("await request.json()"), 1)
+
     def test_client_referenced_routes_exist_in_worker(self):
         """
         Pull /api/... strings that the Python client POSTs/GETs against the

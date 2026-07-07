@@ -310,6 +310,40 @@ class ServerIntegrationTests(unittest.TestCase):
         resp = self._get("/api/soundtrack/zones", cookie=session)
         self.assertEqual(resp.status, 403)
 
+    def test_post_rejects_cross_origin(self):
+        """A POST with a foreign Origin header is blocked (CSRF defense)."""
+        login = self._post_form("/login", {"username": "admin", "password": "admin123"})
+        session = _extract_session(login.headers.get("Set-Cookie", ""))
+        req = urllib.request.Request(
+            self.server.base + "/api/send-command",
+            data=b'{}', method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Cookie", f"session={session}")
+        req.add_header("Origin", "http://evil.example.com")
+        try:
+            resp = urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as e:
+            resp = e
+        self.assertEqual(resp.status, 403)
+
+    def test_post_allows_same_origin(self):
+        """A POST whose Origin matches the server host is allowed through."""
+        login = self._post_form("/login", {"username": "admin", "password": "admin123"})
+        session = _extract_session(login.headers.get("Set-Cookie", ""))
+        host = self.server.base.split("://", 1)[1]
+        req = urllib.request.Request(
+            self.server.base + "/api/send-command",
+            data=b'{"protocol":"dummy","host":"x","port":1,"command":""}', method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Cookie", f"session={session}")
+        req.add_header("Origin", self.server.base)
+        try:
+            resp = urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as e:
+            resp = e
+        # Not a 403 CSRF rejection (may be 200 or a command error, but allowed).
+        self.assertNotEqual(resp.status, 403)
+
     def test_send_command_rejects_external_host(self):
         # An authenticated user must not be able to drive the server into
         # connecting to arbitrary external hosts (SSRF).

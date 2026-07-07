@@ -7,7 +7,7 @@ This document provides context for AI assistants working on the Multi-Frames cod
 **Multi-Frames** is a zero-dependency Python web server for displaying configurable iFrames and dashboard widgets. Designed for home dashboards, kiosks, digital signage, and Raspberry Pi deployments.
 
 - **Author**: Marco Longoria, LTS, Inc.
-- **Version**: 1.5.1
+- **Version**: 1.6.0
 - **License**: MIT
 - **Python**: 3.6+
 
@@ -135,7 +135,10 @@ python -m multi_frames --port 8080
 ### 3. User Authentication & Permissions
 - Session-based with secure tokens
 - Admin vs regular users
-- Password hashing — currently bare SHA-256 (no salt); PBKDF2 migration is tracked in `TODO.md`
+- Password hashing — PBKDF2-HMAC-SHA256 with a per-hash random salt (`hash_password`/`verify_password`), 600k iterations. Legacy bare-SHA-256 hashes still verify and are transparently migrated to PBKDF2 on next successful login.
+- CSRF — session cookie is `SameSite=Strict`; state-changing POSTs additionally reject a mismatched `Origin`/`Referer` (`_csrf_ok`). Tunnel-forwarded requests are exempt.
+- Security headers — `send_html` sets `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options: SAMEORIGIN` (omitted for tunnel-forwarded pages), and a permissive `Content-Security-Policy`.
+- Config file is written atomically (temp + `os.replace`) with `0600` permissions; shared in-memory state (`sessions`, `failed_login_attempts`, `_soundtrack_cache`, config writes) is lock-guarded, and a background thread sweeps expired sessions/lockouts.
 - Rate limiting on login
 - **Per-user allow-lists**: each user record may carry optional
   `allowed_iframes` / `allowed_widgets` fields (lists of stable IDs).
@@ -291,4 +294,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.5.1** (2026-07-07)
+Current: **v1.6.0** (2026-07-07)

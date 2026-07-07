@@ -10,23 +10,23 @@ A deeper review with file:line references and severity grouping lives in
 
 ### Critical
 
-- [ ] **Upgrade password hashing** — Replace bare SHA-256 (`hash_password()` in `multi_frames.py:3082`) with PBKDF2 (stdlib `hashlib.pbkdf2_hmac`) using a per-user salt and 600k+ iterations. Migrate existing hashes on next login.
+- [x] **Upgrade password hashing** — done in v1.6.0. `hash_password()`/`verify_password()` use PBKDF2-HMAC-SHA256 with a per-hash 16-byte salt and 600k iterations; legacy SHA-256 hashes still verify and migrate to PBKDF2 on next login.
 
 - [ ] **Strengthen password reset tokens** — `uuid.uuid4()[:8]` at `multi_frames.py:10045` gives only ~32 bits of entropy. Use `secrets.token_urlsafe(32)`, add expiration (e.g. 1 hour), and rate-limit reset attempts.
 
-- [ ] **Add CSRF protection** — No anti-CSRF tokens on any POST form. A malicious page can trigger admin actions (add user, change settings) through victim's session. Generate a per-session token, embed in forms, validate on POST.
+- [x] **Add CSRF protection** — done in v1.6.0. Session cookie is `SameSite=Strict` (never sent cross-site) and state-changing POSTs reject a mismatched `Origin`/`Referer` (`_csrf_ok`); tunnel-forwarded requests are exempt.
 
-- [ ] **Fix SSRF in proxy redirect handling** — The `/proxy/` handler follows HTTP redirects without re-validating the target against `validate_local_ip()` (`multi_frames.py:9869`). A local server can redirect to an external host, letting the proxy fetch arbitrary URLs. Re-validate each redirect target before following.
+- [x] **Fix SSRF in proxy redirect handling** — done in v1.5.1. The `/proxy/` redirect loop re-runs `validate_local_ip()` on every absolute hop, rejects protocol-relative `Location`, and honors the redirect scheme.
 
 ### High
 
 - [ ] **Authenticate info-leak endpoints** — `/api/client-info` and `/api/pi-status` require no auth and expose IP, server port, Pi model, temperature, hostname, memory, and network config. Gate behind authentication.
 
-- [ ] **Add security response headers** — `send_html()` at `multi_frames.py:9603` sets no security headers. Add `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and a basic `Content-Security-Policy`.
+- [x] **Add security response headers** — done in v1.6.0. `send_html()` sets `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `X-Frame-Options: SAMEORIGIN` (omitted for tunnel-embedded pages), and a `Content-Security-Policy`.
 
-- [ ] **Harden session cookies** — Ensure `HttpOnly`, `SameSite=Strict`, and `Secure` (when behind HTTPS) flags are set consistently on all Set-Cookie responses. Explicitly delete sessions on logout.
+- [x] **Harden session cookies** — done in v1.6.0. `HttpOnly` + `SameSite=Strict` on all session cookies, `Secure` when behind TLS (`X-Forwarded-Proto: https`), and logout invalidates the session server-side.
 
-- [ ] **Fix rate-limit bypass via header spoofing** — Login rate limiting trusts `X-Forwarded-For` and `X-Real-IP` headers (`multi_frames.py:9771`), which any client can set. Only trust forwarded headers when behind a known reverse proxy, otherwise use the socket IP.
+- [x] **Fix rate-limit bypass via header spoofing** — re-assessed as **not vulnerable**: login throttling keys on `self.client_address[0]` (the real socket peer), not on any client-settable header. The spoofable `X-Forwarded-For`/`X-Real-IP` parsing only feeds the informational `/api/client-info` display.
 
 ### Medium
 
@@ -34,11 +34,11 @@ A deeper review with file:line references and severity grouping lives in
 
 - [ ] **Avoid innerHTML for dynamic content** — JS in help/diagnostics page uses `innerHTML` with server responses (e.g. `multi_frames.py:5139`). Switch to `textContent` or DOM element creation to eliminate DOM XSS risk.
 
-- [ ] **Set config file permissions** — `save_config()` doesn't restrict file permissions. Set `0600` on `~/.multi_frames_config.json` so only the owning user can read passwords/tokens.
+- [x] **Set config file permissions** — done in v1.6.0. `save_config()` writes atomically (temp + `os.replace`) and `chmod`s the file to `0600`.
 
 - [ ] **Re-enable SSL cert verification in proxy** — Proxy disables certificate verification (`ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE` at `multi_frames.py:9848`), allowing MITM on proxied HTTPS connections. Use default verification or make it configurable.
 
-- [ ] **Escape single quotes in `escape_html()`** — `escape_html()` at `multi_frames.py:3254` does not escape `'` to `&#39;`. While most attributes use double quotes, this is an incomplete mitigation. Add single-quote escaping for defense-in-depth.
+- [x] **Escape single quotes in `escape_html()`** — done in v1.5.1. `escape_html()` now escapes `'` → `&#39;`, and a dedicated `escape_js_string()` handles values interpolated into inline JS handlers/scripts.
 
 ---
 
@@ -48,9 +48,9 @@ A deeper review with file:line references and severity grouping lives in
 
 - [ ] **Cache config in memory** — `load_config()` reads and parses JSON from disk on every HTTP request (`multi_frames.py:9692`, `:9990`). Load once at startup, keep in memory, and reload only when the file's mtime changes.
 
-- [ ] **Thread-safe session storage** — `sessions = {}` (global dict at `multi_frames.py:2983`) is read/written from multiple request threads with no lock. Protect with `threading.Lock()`.
+- [x] **Thread-safe session storage** — done in v1.6.0. `sessions`, `failed_login_attempts`, and `_soundtrack_cache` are guarded by module-level `threading.Lock`s; a background thread sweeps expired entries.
 
-- [ ] **Thread-safe config writes** — Concurrent requests can load config, modify independently, and save — last write wins, losing the other's changes. Use a lock around read-modify-write cycles.
+- [~] **Thread-safe config writes** — partial (v1.6.0). `save_config()` is now atomic and lock-serialized, so writes can't corrupt each other. Full load→modify→save atomicity across concurrent handlers is still open (deferred with the Phase 3 in-memory config cache).
 
 ### High
 

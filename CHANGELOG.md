@@ -5,6 +5,30 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-07-07
+
+Security-hardening release. No user-facing feature changes; existing accounts
+and configs keep working (password hashes migrate automatically on next login).
+
+### Security
+- **PBKDF2 password hashing.** `hash_password()` now uses PBKDF2-HMAC-SHA256 with a per-hash random 16-byte salt and 600,000 iterations (`pbkdf2_sha256$iterations$salt$hash`). `verify_password()` still accepts legacy bare-SHA-256 hashes, and a successful login transparently re-hashes to PBKDF2. Unknown-user logins run a dummy PBKDF2 pass to keep timing constant.
+- **CSRF protection.** The session cookie is `SameSite=Strict` (never sent cross-site) and, as defense-in-depth, state-changing POSTs now reject requests whose `Origin`/`Referer` names a different host. Tunnel-forwarded requests are exempt.
+- **Security response headers.** HTML responses set `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: SAMEORIGIN` (omitted for tunnel-embedded pages), and a `Content-Security-Policy`; JSON responses set `nosniff`.
+- **Hardened session cookies.** `HttpOnly` + `SameSite=Strict` on all session cookies, with `Secure` added automatically when the request arrives over TLS (`X-Forwarded-Proto: https`). Logout now invalidates the session server-side, not just the cookie.
+- **Config file permissions.** `~/…/multi_frames_config.json` is written with `0600` (owner-only) since it holds password hashes and API tokens.
+- **Worker JSON parsing hardened.** All 13 `request.json()` sites now go through a `readJson()` helper that returns `{}` on malformed input instead of rejecting an un-awaited promise and leaking a stack trace through the 500 handler.
+
+### Changed / Fixed
+- **Atomic config writes.** `save_config()` writes to a temp file and `os.replace()`s it into place under a lock, so a crash or concurrent writer can no longer leave a truncated/corrupt config.
+- **Thread-safety.** Access to the shared `sessions`, `failed_login_attempts`, and `_soundtrack_cache` dicts (and config writes) is now guarded by locks — the server is threaded, so these were racy before.
+- **Background state sweeper.** A daemon thread prunes expired sessions and stale login-lockout entries every 5 minutes so those dicts can't grow unbounded under an IP-rotating attacker.
+
+### Deferred
+- **KV read-modify-write races (worker, C-5).** Concurrent widget-template/config/device-list updates can still lose a write because Cloudflare KV has no compare-and-swap. A correct fix needs a Durable Object or a per-key storage layout (each template under its own key); tracked for a later phase rather than shipping a racy half-guard.
+
+### Notes
+- The test suite runs slower (~13s vs ~1.5s) because PBKDF2 verification is intentionally expensive; this is expected.
+
 ## [1.5.1] - 2026-07-07
 
 ### Fixed

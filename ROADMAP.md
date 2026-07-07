@@ -203,15 +203,17 @@ The cloud tunnel path allowed unauthenticated admin-equivalent access; this is n
 
 Remaining low-severity UI items (deferred, not blocking): buttons-editor `:empty` placeholder (U-11), stale `localStorage.adminTab` null-guard, clipboard-copy fallback over plain HTTP, blank-dashboard empty-state when only disabled widgets exist.
 
-### Phase 2 — Hardening & correctness from the standing backlog
-Fold in the still-open REVIEW.md / TODO.md items now that the acute issues are closed:
-- PBKDF2 password hashing with per-user salt + on-login migration.
-- Thread-safety: locks around `sessions`, `failed_login_attempts`, `config`, `_soundtrack_cache`; atomic `save_config` via temp-file + `os.replace`.
-- Background sweeper for expired sessions / failed-login entries.
-- Security response headers + `Content-Security-Policy`; `HttpOnly`/`SameSite` cookies; `0600` config file.
-- CSRF tokens on POST forms (server) and per-tunnel capability tokens (worker, C-8).
-- KV read-modify-write guards or Durable Object for shared collections (C-5).
-- `readJson` helper + specific exception handling in the worker (C-10) and narrow the Python `except: pass` sites.
+### Phase 2 — Hardening & correctness from the standing backlog — ✅ mostly DONE (v1.6.0)
+- ✅ PBKDF2 password hashing with per-hash salt + on-login migration (legacy SHA-256 still verifies).
+- ✅ Thread-safety: locks around `sessions`, `failed_login_attempts`, `_soundtrack_cache`, and config writes; atomic `save_config` via temp-file + `os.replace`.
+- ✅ Background sweeper for expired sessions / failed-login entries.
+- ✅ Security response headers + `Content-Security-Policy`; `HttpOnly`/`SameSite=Strict` cookies (+ `Secure` behind TLS); `0600` config file; server-side session invalidation on logout.
+- ✅ CSRF defense: `SameSite=Strict` cookie + `Origin`/`Referer` check on state-changing POSTs (chosen over per-form tokens — less breakage, complements SameSite; tunnel-forwarded requests exempt).
+- ✅ `readJson` helper applied to all 13 worker `request.json()` sites (C-10).
+- ⏳ **Deferred — KV read-modify-write guards / Durable Object (C-5).** KV has no CAS; a correct fix needs a Durable Object or per-key template storage. Not shipping a racy half-guard.
+- ⏳ Not yet done: per-tunnel capability tokens instead of reusing the session JWT (C-8); narrowing the Python `except: pass` sites (low severity, tracked for a cleanup pass).
+
+Full read-modify-write atomicity of the server `config` across concurrent handlers (load→modify→save under one lock) is **not** yet in place — only the write itself is atomic. Serializing whole handler cycles is a larger refactor deferred alongside the Phase 3 in-memory config cache.
 
 ### Phase 3 — Performance
 Mostly already scoped in TODO.md; sequence after correctness:

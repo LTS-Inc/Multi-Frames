@@ -33,6 +33,18 @@ function errorResponse(message, status = 400) {
   return jsonResponse({ error: message }, status);
 }
 
+// Safely parse a JSON request body. Returns the parsed object, or `fallback`
+// (an empty object by default) when the body is missing or malformed — so a
+// bad request can't reject an un-awaited promise or leak a stack trace, and
+// each handler's own field validation still applies.
+async function readJson(request, fallback = {}) {
+  try {
+    return await request.json();
+  } catch (e) {
+    return fallback;
+  }
+}
+
 // Cryptographically secure random string over the given alphabet.
 function randomString(length, chars) {
   const bytes = new Uint8Array(length);
@@ -514,7 +526,7 @@ export default {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const existing = await env.CONFIGS.get('branding', 'json') || DEFAULT_BRANDING;
         const branding = {
           companyName: body.companyName || DEFAULT_BRANDING.companyName,
@@ -556,7 +568,7 @@ export default {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const { name, hostname, ip_address, version } = body;
         if (!name) return errorResponse('Device name required', 400);
 
@@ -595,7 +607,7 @@ export default {
         const deviceAuth = await verifyDeviceKey(request, env);
         if (!deviceAuth) return errorResponse('Invalid device key', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const device = await env.DEVICES.get(`device:${deviceAuth.id}`, 'json');
         if (!device) return errorResponse('Device not found', 404);
 
@@ -708,7 +720,7 @@ export default {
         if (!user) return errorResponse('Unauthorized', 401);
 
         const deviceId = path.split('/').pop();
-        const body = await request.json();
+        const body = await readJson(request);
 
         const existingConfig = await env.CONFIGS.get(`config:${deviceId}`, 'json');
         const newVersion = (existingConfig?.version || 0) + 1;
@@ -736,7 +748,7 @@ export default {
         const deviceAuth = await verifyDeviceKey(request, env);
         if (!deviceAuth) return errorResponse('Invalid device key', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const existingConfig = await env.CONFIGS.get(`config:${deviceAuth.id}`, 'json');
         const newVersion = (existingConfig?.version || 0) + 1;
 
@@ -768,7 +780,7 @@ export default {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const { device_ids, config } = body;
 
         if (!device_ids || !Array.isArray(device_ids)) {
@@ -799,7 +811,7 @@ export default {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const { version, content, notes } = body;
 
         if (!content) return errorResponse('Firmware content required', 400);
@@ -867,7 +879,7 @@ export default {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const { device_ids } = body;
 
         if (!device_ids || !Array.isArray(device_ids)) {
@@ -907,7 +919,7 @@ export default {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         if (!body.name || !body.type) return errorResponse('name and type required', 400);
 
         const templates = await env.CONFIGS.get('widget_templates', 'json') || [];
@@ -934,7 +946,7 @@ export default {
         if (!user) return errorResponse('Unauthorized', 401);
 
         const templateId = path.split('/').pop();
-        const body = await request.json();
+        const body = await readJson(request);
         const templates = await env.CONFIGS.get('widget_templates', 'json') || [];
         const idx = templates.findIndex(t => t.id === templateId);
         if (idx === -1) return errorResponse('Template not found', 404);
@@ -959,7 +971,7 @@ export default {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const { template_id, device_ids } = body;
         if (!template_id || !device_ids || !Array.isArray(device_ids)) {
           return errorResponse('template_id and device_ids array required', 400);
@@ -1010,7 +1022,7 @@ export default {
         const deviceAuth = await verifyDeviceKey(request, env);
         if (!deviceAuth) return errorResponse('Invalid device key', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const timestamp = new Date().toISOString();
         const metrics = {
           timestamp,
@@ -1179,7 +1191,7 @@ export default {
         const user = await verifyAuth(request, env);
         if (!user) return errorResponse('Unauthorized', 401);
 
-        const body = await request.json();
+        const body = await readJson(request);
         const { device_id } = body;
         if (!device_id) return errorResponse('Device ID required', 400);
 

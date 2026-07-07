@@ -284,6 +284,36 @@ class ServerIntegrationTests(unittest.TestCase):
         resp = self._get("/api/soundtrack/zones", cookie=session)
         self.assertEqual(resp.status, 403)
 
+    def test_send_command_rejects_external_host(self):
+        # An authenticated user must not be able to drive the server into
+        # connecting to arbitrary external hosts (SSRF).
+        import base64
+        login = self._post_form("/login", {"username": "admin", "password": "admin123"})
+        session = _extract_session(login.headers.get("Set-Cookie", ""))
+        resp = self._post_json("/api/send-command", {
+            "protocol": "tcp",
+            "host": "example.com",
+            "port": 80,
+            "command": base64.b64encode(b"GET /").decode("ascii"),
+        }, cookie=session)
+        body = resp.read().decode("utf-8", "replace")
+        self.assertIn("local/private", body)
+
+    def test_send_command_allows_local_host(self):
+        # A local target passes the SSRF gate (connection itself may fail,
+        # but it must not be blocked by the host restriction).
+        import base64
+        login = self._post_form("/login", {"username": "admin", "password": "admin123"})
+        session = _extract_session(login.headers.get("Set-Cookie", ""))
+        resp = self._post_json("/api/send-command", {
+            "protocol": "tcp",
+            "host": "127.0.0.1",
+            "port": 9,
+            "command": base64.b64encode(b"ping").decode("ascii"),
+        }, cookie=session)
+        body = resp.read().decode("utf-8", "replace")
+        self.assertNotIn("local/private", body)
+
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):

@@ -176,17 +176,18 @@ Same root cause as the known `escape_html` single-quote gap, but with concrete l
 
 Sequenced so that each phase is shippable on its own. Effort is rough: **S** ≤ half a day, **M** ≈ 1–2 days, **L** ≈ a week.
 
-### Phase 0 — Stop the bleeding (security, ship first)
-The cloud tunnel path currently allows unauthenticated admin-equivalent access; fix that before anything else.
+### Phase 0 — Stop the bleeding (security, ship first) — ✅ DONE (v1.5.0)
+The cloud tunnel path allowed unauthenticated admin-equivalent access; this is now closed.
 
-| Item | Refs | Effort |
-|------|------|--------|
-| HMAC-verify the worker JWT signature | C-1 | S |
-| Escape device-controlled fields in the portal | C-2 | S |
-| Bind tunnel routes to their initiating user; require `device_key` | C-3, C-4 | M |
-| Restrict `/api/send-command` to local hosts + admins | N-1 | S |
-| Add OAuth `state`; use CSPRNG for keys/tokens | C-7, C-9 | S |
-| Close the socket + proxy-conn leaks (`try/finally`) | N-2, N-5 | S |
+| Item | Refs | Effort | Status |
+|------|------|--------|--------|
+| HMAC-verify the worker JWT signature | C-1 | S | ✅ |
+| Escape device-controlled fields in the portal | C-2 | S | ✅ |
+| Bind tunnel routes to their initiating user; require `device_key` | C-3, C-4 | M | ✅ |
+| Restrict `/api/send-command` to local hosts | N-1 | S | ✅ |
+| Add OAuth `state`; use CSPRNG for keys/tokens | C-7, C-9 | S | ✅ |
+| Close the socket + proxy-conn leaks (`try/finally`) | N-2, N-5 | S | ✅ |
+| Fix tunnel admin-user selection (`is_admin`) | N-4 | S | ✅ (pulled forward) |
 
 ### Phase 1 — Correctness bugs users hit
 | Item | Refs | Effort |

@@ -33,19 +33,68 @@ function errorResponse(message, status = 400) {
   return jsonResponse({ error: message }, status);
 }
 
-function generateDeviceKey() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let key = 'mf_';
-  for (let i = 0; i < 32; i++) {
-    key += chars.charAt(Math.floor(Math.random() * chars.length));
+// Cryptographically secure random string over the given alphabet.
+function randomString(length, chars) {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  let out = '';
+  for (let i = 0; i < length; i++) {
+    out += chars.charAt(bytes[i] % chars.length);
   }
-  return key;
+  return out;
+}
+
+const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+function generateDeviceKey() {
+  return 'mf_' + randomString(32, ALNUM);
+}
+
+// --- base64url helpers (JWT uses base64url, not standard base64) ---
+function base64UrlEncodeBytes(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlEncodeString(str) {
+  return base64UrlEncodeBytes(new TextEncoder().encode(str));
+}
+
+function base64UrlToBytes(b64url) {
+  let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function base64UrlDecodeString(b64url) {
+  return new TextDecoder().decode(base64UrlToBytes(b64url));
+}
+
+async function getSigningKey(env) {
+  return await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(env.JWT_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign', 'verify']
+  );
 }
 
 async function verifyToken(token, env) {
   try {
-    const [header, payload, signature] = token.split('.');
-    const data = JSON.parse(atob(payload));
+    const parts = (token || '').split('.');
+    if (parts.length !== 3) return null;
+    const [header, payload, signature] = parts;
+    const key = await getSigningKey(env);
+    const signingInput = new TextEncoder().encode(`${header}.${payload}`);
+    const valid = await crypto.subtle.verify('HMAC', key, base64UrlToBytes(signature), signingInput);
+    if (!valid) return null;
+    const data = JSON.parse(base64UrlDecodeString(payload));
     if (data.exp && data.exp < Date.now() / 1000) return null;
     if (env.ALLOWED_DOMAIN && data.hd !== env.ALLOWED_DOMAIN) return null;
     return data;
@@ -55,14 +104,16 @@ async function verifyToken(token, env) {
 }
 
 async function createToken(payload, env) {
-  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const data = btoa(JSON.stringify({
+  const header = base64UrlEncodeString(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const body = base64UrlEncodeString(JSON.stringify({
     ...payload,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 86400 * 7
   }));
-  const signature = btoa(env.JWT_SECRET + '.' + data);
-  return `${header}.${data}.${signature}`;
+  const signingInput = `${header}.${body}`;
+  const key = await getSigningKey(env);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signingInput));
+  return `${signingInput}.${base64UrlEncodeBytes(sig)}`;
 }
 
 async function verifyDeviceKey(request, env) {
@@ -111,21 +162,11 @@ const TUNNEL_LOG_TTL = 60 * 60 * 24 * 90; // 90-day retention for tunnel logs
 // that holds WebSocket connections and handles proxy requests in a single execution context
 
 function generateTunnelToken() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let token = 'tun_';
-  for (let i = 0; i < 48; i++) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return token;
+  return 'tun_' + randomString(48, ALNUM);
 }
 
 function generateTunnelId() {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let id = '';
-  for (let i = 0; i < 16; i++) {
-    id += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return id;
+  return randomString(16, 'abcdefghijklmnopqrstuvwxyz0123456789');
 }
 
 // =============================================================================
@@ -370,6 +411,23 @@ export default {
         const code = url.searchParams.get('code');
         if (!code) return errorResponse('Missing code', 400);
 
+        // CSRF protection: the state returned by Google must match the
+        // one we stored in an HttpOnly cookie when the flow started.
+        const returnedState = url.searchParams.get('state');
+        const cookieHeader = request.headers.get('Cookie') || '';
+        let expectedState = null;
+        for (const part of cookieHeader.split(';')) {
+          const eq = part.indexOf('=');
+          if (eq < 0) continue;
+          if (part.slice(0, eq).trim() === 'oauth_state') {
+            expectedState = decodeURIComponent(part.slice(eq + 1).trim());
+            break;
+          }
+        }
+        if (!returnedState || !expectedState || returnedState !== expectedState) {
+          return errorResponse('Invalid or missing OAuth state', 403);
+        }
+
         const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -402,10 +460,19 @@ export default {
           hd: user.hd
         }, env);
 
-        return Response.redirect(`${url.origin}/dashboard?token=${sessionToken}`, 302);
+        // Clear the state cookie now that it has been consumed.
+        return new Response(null, {
+          status: 302,
+          headers: {
+            Location: `${url.origin}/dashboard?token=${sessionToken}`,
+            'Set-Cookie': 'oauth_state=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0' +
+              (url.protocol === 'https:' ? '; Secure' : '')
+          }
+        });
       }
 
       if (path === '/auth/google/url' && method === 'GET') {
+        const state = randomString(32, ALNUM);
         const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
         authUrl.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
         authUrl.searchParams.set('redirect_uri', `${url.origin}/auth/google/callback`);
@@ -413,10 +480,21 @@ export default {
         authUrl.searchParams.set('scope', 'openid email profile');
         authUrl.searchParams.set('access_type', 'online');
         authUrl.searchParams.set('prompt', 'select_account');
+        authUrl.searchParams.set('state', state);
         if (env.ALLOWED_DOMAIN) {
           authUrl.searchParams.set('hd', env.ALLOWED_DOMAIN);
         }
-        return jsonResponse({ url: authUrl.toString() });
+        // Store the state in an HttpOnly cookie for validation at callback.
+        return new Response(JSON.stringify({ url: authUrl.toString() }), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            ...CORS_HEADERS,
+            'Set-Cookie': 'oauth_state=' + encodeURIComponent(state) +
+              '; Path=/; HttpOnly; SameSite=Lax; Max-Age=600' +
+              (url.protocol === 'https:' ? '; Secure' : '')
+          }
+        });
       }
 
       if (path === '/auth/verify' && method === 'GET') {
@@ -1183,6 +1261,7 @@ export default {
         const tunnelId = path.split('/')[3];
         const session = await env.CONFIGS.get(`tunnel:${tunnelId}`, 'json');
         if (!session) return errorResponse('Tunnel not found or expired', 404);
+        if (session.initiated_by !== user.email) return errorResponse('Forbidden', 403);
 
         // Check if tunnel is active via Durable Object
         try {
@@ -1211,6 +1290,9 @@ export default {
 
         const tunnelId = path.split('/')[3];
         const session = await env.CONFIGS.get(`tunnel:${tunnelId}`, 'json');
+        if (session && session.initiated_by !== user.email) {
+          return errorResponse('Forbidden', 403);
+        }
 
         // Close active tunnel via Durable Object
         try {
@@ -1321,13 +1403,15 @@ export default {
           return new Response('Tunnel token expired', { status: 403 });
         }
 
-        // Verify device key from query params
+        // Verify device key from query params (required - proves the caller
+        // is the device this tunnel targets, not just a tunnel-token holder)
         const deviceKey = url.searchParams.get('device_key');
-        if (deviceKey) {
-          const deviceAuth = await env.DEVICES.get(`key:${deviceKey}`, 'json');
-          if (!deviceAuth || deviceAuth.id !== session.device_id) {
-            return new Response('Device key mismatch', { status: 403 });
-          }
+        if (!deviceKey) {
+          return new Response('Device key required', { status: 403 });
+        }
+        const deviceAuth = await env.DEVICES.get(`key:${deviceKey}`, 'json');
+        if (!deviceAuth || deviceAuth.id !== session.device_id) {
+          return new Response('Device key mismatch', { status: 403 });
         }
 
         // Update session status in KV
@@ -1363,10 +1447,17 @@ export default {
         const user = await verifyToken(token, env);
         if (!user) return new Response('Unauthorized', { status: 401 });
 
+        // Only the user who initiated this tunnel may attach to it
+        const adminSession = await env.CONFIGS.get(`tunnel:${tunnelId}`, 'json');
+        if (!adminSession) return new Response('Tunnel not found', { status: 404 });
+        if (adminSession.initiated_by !== user.email) {
+          return new Response('Forbidden', { status: 403 });
+        }
+
         await logTunnelEvent(env, {
           tunnel_id: tunnelId,
-          device_id: '',
-          device_name: '',
+          device_id: adminSession.device_id,
+          device_name: adminSession.device_name,
           event: 'admin_connected',
           admin_email: user.email,
           timestamp: new Date().toISOString()
@@ -1403,6 +1494,11 @@ export default {
         if (!token) return errorResponse('Unauthorized', 401);
         const user = await verifyToken(token, env);
         if (!user) return errorResponse('Unauthorized', 401);
+
+        // Only the user who initiated this tunnel may proxy through it
+        const proxySession = await env.CONFIGS.get(`tunnel:${tunnelId}`, 'json');
+        if (!proxySession) return errorResponse('Tunnel not found or expired', 404);
+        if (proxySession.initiated_by !== user.email) return errorResponse('Forbidden', 403);
 
         // Forward to Durable Object for proxy relay
         const stub = getTunnelDO(env, tunnelId);
@@ -3070,14 +3166,14 @@ function getDashboardHTML(branding) {
 
     // ============== TUNNEL FUNCTIONS ==============
 
-    async function initiateTunnel(deviceId, deviceName) {
+    async function initiateTunnel(deviceId) {
       const device = state.devices.find(d => d.id === deviceId);
       if (!device || device.status !== 'online') {
         showToast('Device must be online to connect', 'error');
         return;
       }
 
-      showToast('Initiating secure tunnel to ' + deviceName + '...');
+      showToast('Initiating secure tunnel to ' + device.name + '...');
 
       const result = await api('/api/tunnel/initiate', {
         method: 'POST',
@@ -3366,6 +3462,17 @@ function getDashboardHTML(branding) {
       \`;
     }
 
+    // Escape untrusted (device-reported) strings before inserting into HTML.
+    function escapeHtml(value) {
+      if (value === null || value === undefined) return '';
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     function renderDeviceCard(device) {
       const isOnline = device.status === 'online';
       const lastSeen = new Date(device.last_seen).toLocaleString();
@@ -3374,7 +3481,7 @@ function getDashboardHTML(branding) {
         <div class="device-card">
           <div class="device-header">
             <div class="device-name">
-              <span>\${device.name}</span>
+              <span>\${escapeHtml(device.name)}</span>
             </div>
             <div class="device-status \${isOnline ? 'status-online' : 'status-offline'}">
               <span class="status-dot"></span>
@@ -3383,31 +3490,31 @@ function getDashboardHTML(branding) {
           </div>
 
           <div class="device-info">
-            <div class="device-info-row">🖥️ <span>\${device.hostname}</span></div>
-            <div class="device-info-row">🌐 <span>\${device.ip_address}</span></div>
-            <div class="device-info-row">📦 <span>v\${device.version}\${device.firmware_pending ? ' ⬆️ Update pending' : ''}</span></div>
-            <div class="device-info-row">🕐 <span>\${lastSeen}</span></div>
+            <div class="device-info-row">🖥️ <span>\${escapeHtml(device.hostname)}</span></div>
+            <div class="device-info-row">🌐 <span>\${escapeHtml(device.ip_address)}</span></div>
+            <div class="device-info-row">📦 <span>v\${escapeHtml(device.version)}\${device.firmware_pending ? ' ⬆️ Update pending' : ''}</span></div>
+            <div class="device-info-row">🕐 <span>\${escapeHtml(lastSeen)}</span></div>
           </div>
 
           \${isOnline ? \`
             <div class="device-stats">
               <div class="device-stat">
-                <div class="device-stat-value">\${device.uptime || '-'}</div>
+                <div class="device-stat-value">\${escapeHtml(device.uptime || '-')}</div>
                 <div class="device-stat-label">Uptime</div>
               </div>
               <div class="device-stat">
-                <div class="device-stat-value">\${device.memory_used || '-'}</div>
+                <div class="device-stat-value">\${escapeHtml(device.memory_used || '-')}</div>
                 <div class="device-stat-label">Memory</div>
               </div>
               <div class="device-stat">
-                <div class="device-stat-value">\${device.cpu_temp ? device.cpu_temp + '°' : '-'}</div>
+                <div class="device-stat-value">\${device.cpu_temp ? escapeHtml(device.cpu_temp) + '°' : '-'}</div>
                 <div class="device-stat-label">Temp</div>
               </div>
             </div>
           \` : ''}
 
           <div class="device-actions">
-            <button class="btn btn-tunnel btn-sm" onclick="initiateTunnel('\${device.id}', '\${device.name}')" \${isOnline ? '' : 'disabled'} title="\${isOnline ? 'Open secure tunnel to device webserver' : 'Device must be online'}">🔒 Connect Remotely</button>
+            <button class="btn btn-tunnel btn-sm" onclick="initiateTunnel('\${device.id}')" \${isOnline ? '' : 'disabled'} title="\${isOnline ? 'Open secure tunnel to device webserver' : 'Device must be online'}">🔒 Connect Remotely</button>
             <button class="btn btn-secondary btn-sm" onclick="viewConfig('\${device.id}')">⚙️ Config</button>
             <button class="btn btn-secondary btn-sm" onclick="requestConfig('\${device.id}')" title="Request device to sync its current config">🔄 Refresh</button>
             <button class="btn btn-danger btn-sm" onclick="deleteDevice('\${device.id}')">🗑️ Remove</button>
@@ -3851,8 +3958,8 @@ function getDashboardHTML(branding) {
             <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">
               \${state.devices.length === 0 ? '<p style="color:var(--text-muted);">No devices registered</p>' :
                 state.devices.map(d => \`
-                  <button class="btn \${d.status === 'online' ? 'btn-tunnel' : 'btn-secondary'} btn-sm" onclick="initiateTunnel('\${d.id}', '\${d.name}')" \${d.status === 'online' ? '' : 'disabled'}>
-                    \${d.status === 'online' ? '🔒' : '⭘'} \${d.name}
+                  <button class="btn \${d.status === 'online' ? 'btn-tunnel' : 'btn-secondary'} btn-sm" onclick="initiateTunnel('\${d.id}')" \${d.status === 'online' ? '' : 'disabled'}>
+                    \${d.status === 'online' ? '🔒' : '⭘'} \${escapeHtml(d.name)}
                   </button>
                 \`).join('')}
             </div>
@@ -3917,7 +4024,7 @@ function getDashboardHTML(branding) {
             \${state.devices.length === 0 ? '<p style="color:var(--text-muted);">No devices registered</p>' :
               state.devices.map(d => \`
                 <button class="btn \${state.metricsDevice === d.id ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="selectMetricsDevice('\${d.id}')">
-                  \${d.name} \${d.status === 'online' ? '🟢' : '🔴'}
+                  \${escapeHtml(d.name)} \${d.status === 'online' ? '🟢' : '🔴'}
                 </button>
               \`).join('')}
           </div>
@@ -4162,8 +4269,8 @@ function getDashboardHTML(branding) {
                     <label style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;">
                       <input type="checkbox" class="push-widget-cb" value="\${d.id}" checked style="width:18px;height:18px;">
                       <div>
-                        <div style="font-weight:500;">\${d.name}</div>
-                        <div style="font-size:0.8rem;color:var(--text-muted);">\${d.status === 'online' ? 'Online' : 'Offline'} · v\${d.version}</div>
+                        <div style="font-weight:500;">\${escapeHtml(d.name)}</div>
+                        <div style="font-size:0.8rem;color:var(--text-muted);">\${d.status === 'online' ? 'Online' : 'Offline'} · v\${escapeHtml(d.version)}</div>
                       </div>
                     </label>
                   \`).join('')}
@@ -4195,8 +4302,8 @@ function getDashboardHTML(branding) {
                     <label style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem;background:var(--bg-tertiary);border-radius:10px;cursor:pointer;">
                       <input type="checkbox" class="deploy-device-cb" value="\${d.id}" checked style="width:18px;height:18px;">
                       <div>
-                        <div style="font-weight:500;">\${d.name}</div>
-                        <div style="font-size:0.8rem;color:var(--text-muted);">Currently: v\${d.version} \${d.status === 'online' ? '(online)' : '(offline)'}</div>
+                        <div style="font-weight:500;">\${escapeHtml(d.name)}</div>
+                        <div style="font-size:0.8rem;color:var(--text-muted);">Currently: v\${escapeHtml(d.version)} \${d.status === 'online' ? '(online)' : '(offline)'}</div>
                       </div>
                     </label>
                   \`).join('')}

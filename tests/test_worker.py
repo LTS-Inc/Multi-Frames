@@ -51,6 +51,22 @@ class WorkerStaticChecks(unittest.TestCase):
     def test_handles_cors_preflight(self):
         self.assertRegex(self.src, r"['\"]OPTIONS['\"]")
 
+    def test_jwt_uses_hmac_not_fake_signature(self):
+        # Regression: tokens must be signed/verified with real HMAC-SHA256,
+        # not the old `btoa(JWT_SECRET + '.' + data)` concatenation, and
+        # verifyToken must actually check the signature.
+        self.assertNotIn("btoa(env.JWT_SECRET", self.src)
+        self.assertIn("crypto.subtle.sign", self.src)
+        self.assertIn("crypto.subtle.verify", self.src)
+
+    def test_credentials_use_csprng(self):
+        # Device keys and tunnel tokens must not be generated with Math.random.
+        self.assertNotIn("Math.random", self.src)
+        self.assertIn("crypto.getRandomValues", self.src)
+
+    def test_oauth_callback_validates_state(self):
+        self.assertIn("oauth_state", self.src)
+
     def test_client_referenced_routes_exist_in_worker(self):
         """
         Pull /api/... strings that the Python client POSTs/GETs against the

@@ -5,6 +5,26 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-07-07
+
+### Security
+- **Cloud JWT tokens are now signed and verified with HMAC-SHA256** (`crypto.subtle`). Previously the signature was `btoa(JWT_SECRET + '.' + data)` and `verifyToken()` never checked it at all, so anyone could forge an admin session and reach every authenticated worker route. Existing cloud sessions are invalidated and users must sign in again.
+- **Stored XSS fixed in the cloud portal.** Device-reported fields (`name`, `hostname`, `ip_address`, `version`, and stat values) are now HTML-escaped before being inserted into the Devices/metrics/push views. A malicious or compromised device can no longer inject script into an admin's browser. Tunnel buttons pass only the device `id` and look the name up client-side, removing the `onclick` string-injection surface.
+- **Tunnel routes are now bound to their initiating user.** Tunnel status, close, `admin-ws`, and the HTTP proxy verify `initiated_by` matches the caller, so one authenticated user can no longer drive, attach to, or close another user's tunnel by guessing a tunnel id.
+- **Device WebSocket now requires `device_key`.** The relay's device end previously verified the device key only when present; it is now mandatory, so a tunnel-token holder can no longer impersonate the device end.
+- **OAuth login now uses a `state` parameter** stored in an HttpOnly cookie and validated on callback, closing a login-CSRF vector.
+- **Device keys and tunnel tokens now use a CSPRNG** (`crypto.getRandomValues`) instead of `Math.random()`.
+- **`/api/send-command` is restricted to local/private hosts.** An authenticated user could previously make the server open TCP/UDP/Telnet connections to any host and port (internal services, cloud metadata). Real network protocols are now gated by `validate_local_ip()`.
+
+### Fixed
+- Socket file-descriptor leak in `send_network_command()`: sockets are now closed via `try/finally` on every path, so failed TCP/UDP/Telnet commands no longer leak descriptors (which could eventually exhaust the server).
+- Proxy connection leak: the `/proxy/` upstream connection is now closed in a `finally` block so an exception mid-fetch no longer leaks a socket.
+- Cloud tunnel session selection used a non-existent `role` field; it now checks `is_admin`, so the tunnel authenticates as an actual admin instead of falling back to an arbitrary user.
+
+### Added
+- Regression tests: `/api/send-command` host restriction (accept local, reject external), and worker static checks asserting HMAC signing/verification, CSPRNG credential generation, and OAuth `state` validation. Suite is now 55 tests.
+- `ROADMAP.md` — review findings (UI + network bugs with file:line) and a phased improvement roadmap.
+
 ## [1.4.9] - 2026-05-25
 
 ### Added

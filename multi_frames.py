@@ -295,8 +295,8 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.4.9"
-VERSION_DATE = "2026-05-25"
+VERSION = "1.5.0"
+VERSION_DATE = "2026-07-07"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
 VERSION_COMPANY = "LTS, Inc."
@@ -1221,7 +1221,7 @@ class CloudAgent:
             # Use the first admin user, or first available user
             tunnel_user = None
             for uname, udata in users.items():
-                if udata.get('role') == 'admin':
+                if udata.get('is_admin'):
                     tunnel_user = uname
                     break
             if not tunnel_user and users:
@@ -3292,31 +3292,34 @@ def send_network_command(protocol, host, port, command, timeout=5):
         elif protocol == 'udp':
             # UDP - fire and forget (no response expected)
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(timeout)
-            sock.sendto(command.encode('utf-8'), (host, port))
-            sock.close()
+            try:
+                sock.settimeout(timeout)
+                sock.sendto(command.encode('utf-8'), (host, port))
+            finally:
+                sock.close()
             result['success'] = True
             result['response'] = 'UDP packet sent'
-            
+
         elif protocol == 'tcp':
             # TCP - send and optionally receive response
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            sock.connect((host, port))
-            
-            # Send command (add newline if not present for many protocols)
-            cmd_to_send = command if command.endswith('\n') or command.endswith('\r\n') else command + '\r\n'
-            sock.sendall(cmd_to_send.encode('utf-8'))
-            
-            # Try to receive response (non-blocking after short delay)
             try:
-                sock.settimeout(1)
-                response = sock.recv(4096).decode('utf-8', errors='ignore')
-                result['response'] = response.strip()
-            except socket.timeout:
-                result['response'] = 'Command sent (no response)'
-            
-            sock.close()
+                sock.settimeout(timeout)
+                sock.connect((host, port))
+
+                # Send command (add newline if not present for many protocols)
+                cmd_to_send = command if command.endswith('\n') or command.endswith('\r\n') else command + '\r\n'
+                sock.sendall(cmd_to_send.encode('utf-8'))
+
+                # Try to receive response (non-blocking after short delay)
+                try:
+                    sock.settimeout(1)
+                    response = sock.recv(4096).decode('utf-8', errors='ignore')
+                    result['response'] = response.strip()
+                except socket.timeout:
+                    result['response'] = 'Command sent (no response)'
+            finally:
+                sock.close()
             result['success'] = True
             
         elif protocol == 'telnet':
@@ -3324,44 +3327,45 @@ def send_network_command(protocol, host, port, command, timeout=5):
             try:
                 import telnetlib
                 tn = telnetlib.Telnet(host, port, timeout=timeout)
-                
-                # Send command
-                cmd_to_send = command if command.endswith('\n') else command + '\n'
-                tn.write(cmd_to_send.encode('utf-8'))
-                
-                # Read response with short timeout
                 try:
-                    response = tn.read_until(b'\n', timeout=2).decode('utf-8', errors='ignore')
-                    result['response'] = response.strip()
-                except:
-                    result['response'] = 'Command sent'
-                
-                tn.close()
+                    # Send command
+                    cmd_to_send = command if command.endswith('\n') else command + '\n'
+                    tn.write(cmd_to_send.encode('utf-8'))
+
+                    # Read response with short timeout
+                    try:
+                        response = tn.read_until(b'\n', timeout=2).decode('utf-8', errors='ignore')
+                        result['response'] = response.strip()
+                    except EOFError:
+                        result['response'] = 'Command sent'
+                finally:
+                    tn.close()
                 result['success'] = True
             except ImportError:
                 # telnetlib removed in Python 3.13+, fall back to raw socket
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(timeout)
-                sock.connect((host, port))
-                
-                # Read initial telnet negotiation (if any)
                 try:
-                    sock.settimeout(0.5)
-                    sock.recv(1024)  # Discard telnet negotiation
-                except:
-                    pass
-                
-                cmd_to_send = command if command.endswith('\n') else command + '\n'
-                sock.sendall(cmd_to_send.encode('utf-8'))
-                
-                try:
-                    sock.settimeout(1)
-                    response = sock.recv(4096).decode('utf-8', errors='ignore')
-                    result['response'] = response.strip()
-                except socket.timeout:
-                    result['response'] = 'Command sent'
-                
-                sock.close()
+                    sock.settimeout(timeout)
+                    sock.connect((host, port))
+
+                    # Read initial telnet negotiation (if any)
+                    try:
+                        sock.settimeout(0.5)
+                        sock.recv(1024)  # Discard telnet negotiation
+                    except socket.timeout:
+                        pass
+
+                    cmd_to_send = command if command.endswith('\n') else command + '\n'
+                    sock.sendall(cmd_to_send.encode('utf-8'))
+
+                    try:
+                        sock.settimeout(1)
+                        response = sock.recv(4096).decode('utf-8', errors='ignore')
+                        result['response'] = response.strip()
+                    except socket.timeout:
+                        result['response'] = 'Command sent'
+                finally:
+                    sock.close()
                 result['success'] = True
         else:
             result['error'] = f'Unknown protocol: {protocol}'
@@ -10367,6 +10371,7 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             sub_path = '/' + parts[1] if len(parts) > 1 else parsed_target.path or '/'
             query_string = self.path.split('?', 1)[1] if '?' in self.path else ''
 
+            conn = None
             try:
                 import http.client
                 conn_host = parsed_target.hostname
@@ -10422,7 +10427,6 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                     redirects += 1
 
                 body = resp.read()
-                conn.close()
 
                 content_type = resp.getheader('Content-Type', 'text/html')
 
@@ -10459,6 +10463,12 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 server_logger.error(f"Proxy error for iframe {iframe_idx}: {e}")
                 self.send_json({'error': f'Proxy request failed: {str(e)}'}, 502)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
         elif path == '/api/ping':
             # Simple ping endpoint for connectivity check
@@ -10617,7 +10627,14 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 if protocol not in ('tcp', 'udp', 'telnet', 'dummy', 'dummy_fail', 'dummy_random'):
                     self.send_json({'success': False, 'error': 'Invalid protocol'})
                     return
-                
+
+                # Restrict real network commands to local/private targets so an
+                # authenticated user can't use the server to reach arbitrary
+                # internal services or cloud metadata endpoints (SSRF).
+                if protocol in ('tcp', 'udp', 'telnet') and not validate_local_ip(f'//{host}'):
+                    self.send_json({'success': False, 'error': 'Commands are only allowed to local/private hosts'})
+                    return
+
                 # Send the command
                 result = send_network_command(protocol, host, port, command)
                 

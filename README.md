@@ -8,7 +8,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/v1.7.0-2026--07--07-0078D4?style=flat-square&labelColor=000000)](#)
+[![Version](https://img.shields.io/badge/v1.8.0-2026--07--07-0078D4?style=flat-square&labelColor=000000)](#)
 [![Python](https://img.shields.io/badge/Python-3.6+-3776AB?style=flat-square&logo=python&logoColor=white&labelColor=000000)](#)
 [![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square&labelColor=000000)](#)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Mac%20%7C%20Linux%20%7C%20Pi-888888?style=flat-square&labelColor=000000)](#)
@@ -585,6 +585,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.8.0** | 2026-07-07 | Mobile-first: installable PWA + offline service worker, light/dark theme toggle, launch splash, responsive iframe/widget/touch fixes |
 | **1.7.0** | 2026-07-07 | Config schema migrations, branding images moved to files, opt-in audit log, `/healthz`, removed dead modular package |
 | **1.6.1** | 2026-07-07 | Performance: in-memory config cache, cached CSS, gzip, cacheable `/static` branding assets |
 | **1.6.0** | 2026-07-07 | Security hardening: PBKDF2 hashing, thread-safety, atomic config, security headers, CSRF, sweeper |

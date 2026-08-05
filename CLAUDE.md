@@ -7,7 +7,7 @@ This document provides context for AI assistants working on the Multi-Frames cod
 **Multi-Frames** is a zero-dependency Python web server for displaying configurable iFrames and dashboard widgets. Designed for home dashboards, kiosks, digital signage, and Raspberry Pi deployments.
 
 - **Author**: Marco Longoria, LTS, Inc.
-- **Version**: 1.7.0
+- **Version**: 1.8.0
 - **License**: MIT
 - **Python**: 3.6+
 
@@ -127,6 +127,7 @@ There is no build step — `multi_frames.py` is the source and the deliverable.
 - **Config schema versioning** — `config["schema_version"]` + an ordered migration runner (`_migrate_config`) applied in `load_config()`. Migrations so far: v1 backfills iframe/widget IDs; v2 externalizes branding images. Add new migrations by appending to `_CONFIG_MIGRATIONS` and bumping `CONFIG_SCHEMA_VERSION`.
 - **Branding images live as files** (schema v2) under `multi_frames_assets/` (next to the config), referenced from config as `<key>_file` + mime and served from `/static/<name>`. Legacy inline base64 still verifies and is migrated to a file on load. Use `set_branding_asset`/`clear_branding_asset`/`read_branding_asset`/`branding_asset_url`.
 - **Optional audit log** — set `MF_AUDIT_LOG=/path` (and optional `MF_AUDIT_MAX_BYTES`) to write security events (login success/failure/lockout, logout, user add/delete, password/permission changes, commands, tunnel/server start) as size-rotated JSONL via the `audit_logger` singleton.
+- **PWA + mobile** — every page's `<head>` (single builder: `render_page`) carries the manifest link, `theme-color`, `viewport-fit=cover`, a no-FOUC theme pre-paint script, and registers `/sw.js`. `build_manifest()` and `service_worker_js()` produce the manifest/SW; the SW cache is versioned by `VERSION` and only cache-firsts immutable `/static` assets (navigations are network-first, `/api`/`/proxy`/auth never cached). A 🌙/☀️ nav button toggles a client-side light/dark theme (`data-theme` on `<html>`, persisted in `localStorage`, defaulting to `prefers-color-scheme`); the light palette is a `:root[data-theme="light"]` block in `_generate_dynamic_styles`. There is **no build step and no framework** — mobile/PWA is all vanilla CSS/JS in the single file.
 - Rate limiting on login
 - **Per-user allow-lists**: each user record may carry optional
   `allowed_iframes` / `allowed_widgets` fields (lists of stable IDs).
@@ -166,6 +167,8 @@ There is no build step — `multi_frames.py` is the source and the deliverable.
 | `/logout` | GET | User logout |
 | `/healthz`, `/api/health` | GET | Health/readiness JSON (status, version, uptime) — no auth, no sensitive data |
 | `/static/<name>` | GET | Cacheable branding assets (logo, favicon, icons, background) with `ETag`/`Cache-Control` |
+| `/manifest.webmanifest` | GET | PWA web app manifest (built from branding + appearance) — makes the dashboard installable |
+| `/sw.js` | GET | Service worker (cache versioned by `VERSION`) — offline app-shell; auth-safe caching |
 
 ### Authenticated
 | Endpoint | Method | Description |
@@ -284,4 +287,4 @@ rm ~/.multi_frames_config.json
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
 
-Current: **v1.7.0** (2026-07-07)
+Current: **v1.8.0** (2026-07-07)

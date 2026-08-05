@@ -5,6 +5,35 @@ All notable changes to Multi-Frames will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-07-07
+
+Mobile-first UI/UX release: the dashboard is now an installable, offline-capable
+PWA with a light/dark theme toggle, a launch splash, and a raft of responsive
+fixes. No framework added — everything stays in the single zero-dependency
+Python file. Fully backward compatible.
+
+### Added
+- **Installable PWA.** New public `GET /manifest.webmanifest` (built from branding + appearance) and `<link rel="manifest">`, plus `theme-color`, `mobile-web-app-capable`, `viewport-fit=cover`, and apple/android icon wiring. The dashboard can be added to the home screen and launches standalone (no browser chrome).
+- **Offline service worker.** New public `GET /sw.js` (cache versioned by app VERSION). Strategy is auth-safe: cache-first only for immutable hashed `/static/*` assets + the manifest; navigations are network-first with a generic offline page; `/api`, `/proxy`, `/login`, `/logout` and non-GET are never cached. Registered from every page (skipped inside the cloud-tunnel iframe).
+- **Light/dark theme toggle.** A 🌙/☀️ button in the header flips the theme, persists to `localStorage`, and defaults to the device's `prefers-color-scheme`. A pre-paint inline script applies the theme before first render (no flash). Widgets follow the theme (legacy default widget colors are treated as "use theme"; genuinely custom widget colors are respected).
+- **App launch splash.** A branded loading overlay shows on first load / standalone launch and fades out once ready (shown once per session; respects `prefers-reduced-motion`).
+
+### Fixed / improved (mobile)
+- **Responsive iframe heights.** Frames no longer render at a fixed desktop height on phones — height is capped to `min(configured, 75vh)` via a `--frame-h` variable, and width-<100% frames go full width so they aren't tall slivers.
+- **Landscape phones** show at most 2 widget columns (was 4, which crushed the clock/weather).
+- **Touch targets** raised to 44px consistently (`.btn-sm`, the ▲/▼ move buttons, the theme button, nav links); range inputs (volume sliders) get a proper touch-sized track/thumb, are wider, and update live (debounced) instead of only on release.
+- **Wide admin tables** scroll horizontally instead of overflowing the page; long iframe URLs ellipsize; weather/soundtrack control rows wrap; text-widget content scrolls instead of breaking layout.
+- The floating fullscreen button now respects the iOS safe-area (no longer covers content on notched phones), and the safe-area CSS is actually active now that `viewport-fit=cover` is set.
+
+### Fixed (regression)
+- Image backgrounds render again: the `bg-overlay` element check still looked for the pre-1.7.0 inline `image` key instead of the file-backed `image_file`.
+
+### Cleanup
+- The admin **iframe-gap** and **content-padding** appearance settings now actually take effect (they previously targeted an unused `.grid` selector). Removed dead CSS (`.cmd-btn-grid`, `.info-table`, `.stats-grid`, `.btn-group`, and the inert `prefers-color-scheme` `.pure-black` block, superseded by the real light theme).
+
+### Not done (by decision)
+- Drag-and-drop reordering was intentionally **not** added; the ▲/▼ move buttons remain. No Next.js / build step / npm — the single-file zero-dependency model is preserved.
+
 ## [1.7.0] - 2026-07-07
 
 Platform release: schema migrations, external image storage, audit logging, a

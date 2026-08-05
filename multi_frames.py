@@ -295,7 +295,7 @@ Version History:
 # =============================================================================
 # Version Information
 # =============================================================================
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 VERSION_DATE = "2026-07-07"
 VERSION_NAME = "Multi-Frames"
 VERSION_AUTHOR = "Marco Longoria"
@@ -3771,6 +3771,113 @@ def branding_asset_url(config, name):
         return f'/static/{name}?v={ver}'
     return None
 
+
+# Inline SVG app icon used as a manifest/icon fallback when no branding image
+# has been uploaded.
+_FALLBACK_ICON_DATA_URI = (
+    "data:image/svg+xml,"
+    "%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E"
+    "%3Crect%20width='100'%20height='100'%20rx='20'%20fill='%233b82f6'/%3E"
+    "%3Ctext%20x='50'%20y='68'%20font-size='60'%20text-anchor='middle'%20fill='white'%3E%E2%97%88%3C/text%3E%3C/svg%3E"
+)
+
+
+def build_manifest(config):
+    """Build the PWA web app manifest from branding + appearance settings."""
+    settings = config.get("settings", {})
+    colors = (config.get("appearance", {}) or {}).get("colors", {})
+    branding = config.get("branding", {})
+    name = (settings.get("page_title") or "Multi-Frames").strip() or "Multi-Frames"
+
+    icons = []
+    android = branding_asset_url(config, 'android-icon')
+    if android:
+        icons.append({"src": android, "sizes": "192x192",
+                      "type": branding.get("android_icon_mime", "image/png"),
+                      "purpose": "any maskable"})
+    apple = branding_asset_url(config, 'apple-touch-icon')
+    if apple:
+        icons.append({"src": apple, "sizes": "180x180",
+                      "type": branding.get("apple_touch_icon_mime", "image/png")})
+    favicon = branding_asset_url(config, 'favicon')
+    if favicon:
+        icons.append({"src": favicon, "sizes": "any",
+                      "type": branding.get("favicon_mime", "image/png")})
+    if not icons:
+        icons.append({"src": _FALLBACK_ICON_DATA_URI, "sizes": "any",
+                      "type": "image/svg+xml", "purpose": "any maskable"})
+
+    return {
+        "name": name,
+        "short_name": name[:12],
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "orientation": "any",
+        "background_color": colors.get("bg_primary", "#0a0a0b"),
+        "theme_color": colors.get("bg_secondary", colors.get("bg_primary", "#0a0a0b")),
+        "icons": icons,
+    }
+
+
+# Service worker source. Cache key is stamped with VERSION at request time so
+# each release self-invalidates. Strategy is auth-safe: cache-first only for
+# immutable hashed /static assets + the manifest; navigations are network-first
+# with a generic offline page (never a cached authenticated dashboard); /api,
+# /proxy, /login, /logout and non-GET are never cached.
+_SERVICE_WORKER_TEMPLATE = r"""
+const CACHE = 'mf-__CACHE_VERSION__';
+self.addEventListener('install', function(e){ self.skipWaiting(); });
+self.addEventListener('activate', function(e){
+  e.waitUntil((async function(){
+    var keys = await caches.keys();
+    await Promise.all(keys.filter(function(k){return k!==CACHE;}).map(function(k){return caches.delete(k);}));
+    await self.clients.claim();
+  })());
+});
+self.addEventListener('fetch', function(event){
+  var req = event.request;
+  if (req.method !== 'GET') return;
+  var url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.indexOf('/static/') === 0 || url.pathname === '/manifest.webmanifest') {
+    event.respondWith((async function(){
+      var cached = await caches.match(req);
+      if (cached) return cached;
+      try {
+        var res = await fetch(req);
+        if (res && res.ok) { var c = await caches.open(CACHE); c.put(req, res.clone()); }
+        return res;
+      } catch (e) { return cached || Response.error(); }
+    })());
+    return;
+  }
+  if (url.pathname.indexOf('/api/') === 0 || url.pathname.indexOf('/proxy/') === 0 ||
+      url.pathname === '/login' || url.pathname === '/logout') return;
+  if (req.mode === 'navigate') {
+    event.respondWith((async function(){
+      try { return await fetch(req); }
+      catch (e) {
+        return new Response(
+          '<!doctype html><meta charset=utf-8>' +
+          '<meta name=viewport content="width=device-width,initial-scale=1">' +
+          '<title>Offline</title>' +
+          '<style>body{font-family:system-ui,-apple-system,sans-serif;background:#0a0a0b;color:#e5e7eb;' +
+          'display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}' +
+          'button{margin-top:1rem;padding:.7rem 1.4rem;border:0;border-radius:8px;background:#3b82f6;color:#fff;font-size:1rem}</style>' +
+          '<div><h1>Offline</h1><p>Multi-Frames can\'t be reached right now.</p>' +
+          '<button onclick="location.reload()">Retry</button></div>',
+          { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      }
+    })());
+  }
+});
+"""
+
+
+def service_worker_js():
+    return _SERVICE_WORKER_TEMPLATE.replace('__CACHE_VERSION__', VERSION)
+
 def _externalize_branding_images(cfg):
     """Schema migration: move any inline base64 branding/background images out
     of the config and into files under the assets dir."""
@@ -3922,6 +4029,11 @@ a:hover { text-decoration: underline; }
     margin: 0 auto;
     padding: 1.5rem;
 }
+/* The admin "content padding" appearance setting applies to the main content
+   area (not the header bar). */
+main.container {
+    padding: var(--content-padding, 1.5rem);
+}
 
 /* Header */
 header {
@@ -3968,7 +4080,7 @@ header .container {
     border-left: 1px solid var(--border);
 }
 
-nav { display: flex; gap: 1rem; align-items: center; }
+nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; justify-content: flex-end; }
 nav a, nav span {
     font-size: 0.85rem;
     color: var(--text-secondary);
@@ -3981,6 +4093,40 @@ nav a:hover {
     background: var(--bg-tertiary);
     text-decoration: none;
 }
+/* Theme toggle button styled to sit inline with nav links */
+.nav-btn {
+    font-size: 1rem;
+    line-height: 1;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid transparent;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.nav-btn:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+
+/* App splash / loading screen (app-launch feel; removed after first paint) */
+#app-splash {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-primary);
+    transition: opacity 0.35s ease;
+}
+#app-splash.hide { opacity: 0; pointer-events: none; }
+.app-splash-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.25rem;
+}
+.app-splash-inner img { max-height: 72px; max-width: 200px; object-fit: contain; }
+html.no-splash #app-splash { display: none !important; }
 
 /* Forms */
 .card {
@@ -4107,13 +4253,19 @@ button:hover, .btn:hover {
 /* iFrame Grid */
 .iframe-grid {
     display: grid;
-    gap: 1rem;
+    gap: var(--iframe-gap, 1rem);
     grid-template-columns: repeat(var(--cols, 2), 1fr);
 }
 
 @media (max-width: 900px) {
-    .iframe-grid { grid-template-columns: 1fr; }
-    .iframe-card iframe { min-height: 250px; }
+    .iframe-grid { grid-template-columns: 1fr !important; }
+    /* Full width so a width<100% frame isn't a tall narrow sliver on phones */
+    .iframe-card { max-width: 100% !important; }
+    /* Cap frame height to the viewport so the dashboard isn't an endless
+       scroll of fixed-tall desktop pages. --frame-h is the admin-set height. */
+    .iframe-card iframe,
+    .iframe-fallback { height: min(var(--frame-h, 400px), 75vh); }
+    .iframe-wrapper { max-height: 75vh; }
     .iframe-card h3 { padding: 0.6rem 0.75rem; font-size: 0.8rem; }
 }
 
@@ -4145,12 +4297,53 @@ button:hover, .btn:hover {
     color: var(--text-secondary);
     font-weight: 400;
     font-size: 0.75rem;
+    max-width: 50%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Range inputs (volume sliders etc.) — touch-friendly track + thumb, and they
+   opt out of the generic bordered-box input styling. */
+input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 8px;
+    padding: 0;
+    min-height: 0;
+    background: var(--bg-tertiary);
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--bg-secondary);
+    cursor: pointer;
+}
+input[type="range"]::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border: 2px solid var(--bg-secondary);
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+}
+@media (hover: none) and (pointer: coarse) {
+    input[type="range"] { height: 12px; }
+    input[type="range"]::-webkit-slider-thumb { width: 28px; height: 28px; }
+    input[type="range"]::-moz-range-thumb { width: 28px; height: 28px; }
 }
 
 
 .iframe-card iframe {
     width: 100%;
-    height: 400px;
+    height: var(--frame-h, 400px);
     border: none;
     background: var(--bg-primary);
 }
@@ -4526,14 +4719,14 @@ footer a:hover {
     }
     
     .btn-sm {
-        min-height: 36px;
+        min-height: 44px;
         padding: 0.5rem 1rem;
     }
-    
-    .btn-icon {
-        width: 36px;
-        height: 36px;
-        font-size: 0.9rem;
+
+    .btn-icon, .nav-btn {
+        min-width: 44px;
+        min-height: 44px;
+        font-size: 1rem;
     }
     
     input, select, textarea {
@@ -4716,59 +4909,24 @@ footer a:hover {
         text-align: center;
     }
     
-    /* Button groups stack on mobile */
-    .btn-group {
-        flex-direction: column;
-        width: 100%;
-    }
-    
-    .btn-group .btn {
-        width: 100%;
-    }
-    
-    /* Tables become cards on mobile */
-    .info-table {
-        display: block;
-    }
-    
-    .info-table tr {
-        display: flex;
-        flex-direction: column;
-        padding: 0.75rem 0;
-        border-bottom: 1px solid var(--border);
-    }
-    
-    .info-table td:first-child {
-        font-weight: 500;
-        color: var(--text-secondary);
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        margin-bottom: 0.25rem;
-    }
-    
     /* Widget adjustments */
     .widgets-container {
         grid-template-columns: repeat(2, 1fr);
         gap: 0.75rem;
     }
-    
+
     .widget {
         padding: 0.75rem;
     }
-    
+
     .widget-clock {
         font-size: 1.5rem;
     }
-    
+
     .widget-header {
         font-size: 0.65rem;
     }
-    
-    /* Command buttons grid */
-    .cmd-btn-grid {
-        grid-template-columns: repeat(2, 1fr) !important;
-    }
-    
+
     /* Footer */
     footer {
         padding: 1.5rem 1rem;
@@ -4793,11 +4951,6 @@ footer a:hover {
     
     .preview-box img {
         max-height: 50px;
-    }
-    
-    /* Stats grid */
-    .stats-grid {
-        grid-template-columns: repeat(2, 1fr);
     }
 }
 
@@ -4826,7 +4979,6 @@ footer a:hover {
     header nav a {
         padding: 0.4rem 0.5rem;
         font-size: 0.75rem;
-        min-height: 36px;
     }
 
     .card {
@@ -4882,14 +5034,27 @@ footer a:hover {
     }
 }
 
+/* Wide data tables scroll horizontally on phones instead of overflowing the
+   page. Excludes .help-table, which has its own row→card transform. */
+@media (max-width: 768px) {
+    table:not(.help-table) {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        white-space: nowrap;
+        max-width: 100%;
+    }
+}
+
 /* Landscape phone */
 @media (max-width: 900px) and (orientation: landscape) {
     .card {
         max-width: 500px;
     }
-    
+
+    /* Two columns in landscape — 4 crushed the clock/weather widgets */
     .widgets-container {
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(2, 1fr);
     }
 }
 
@@ -4918,13 +5083,6 @@ footer a:hover {
     }
 }
 
-/* Dark mode enhancements for OLED screens */
-@media (prefers-color-scheme: dark) {
-    .pure-black {
-        --bg-primary: #000000;
-        --bg-secondary: #0a0a0a;
-    }
-}
 """
 
 _css_cache = {"key": None, "css": None}
@@ -5010,6 +5168,19 @@ def _generate_dynamic_styles(config, appearance):
         --transition-speed: {transition_speed if animations_enabled else '0s'};
     }}
 
+    /* Light theme (client-side toggle / device preference). Keeps the admin's
+       brand accent/danger/success but swaps surfaces + text to a light set. */
+    :root[data-theme="light"] {{
+        --bg-primary: #f4f5f7;
+        --bg-secondary: #ffffff;
+        --bg-tertiary: #eceef1;
+        --border: #d8dce1;
+        --text-primary: #1a1d21;
+        --text-secondary: #5b6470;
+        --header-bg: #ffffff;
+        --header-text: #1a1d21;
+    }}
+
     body {{
         font-family: var(--font-family);
         font-size: var(--base-font-size);
@@ -5017,11 +5188,6 @@ def _generate_dynamic_styles(config, appearance):
 
     h1, h2, h3, h4, h5, h6 {{
         font-weight: var(--heading-weight);
-    }}
-
-    .grid {{
-        gap: var(--iframe-gap);
-        padding: var(--content-padding);
     }}
 
     .frame-container, .widget, .admin-section, .card {{
@@ -5235,6 +5401,7 @@ def _generate_dynamic_styles(config, appearance):
     
     .iframe-fallback {
         display: none;
+        height: var(--frame-h, 400px);
         align-items: center;
         justify-content: center;
         background: var(--bg-tertiary);
@@ -5282,16 +5449,19 @@ def render_page(title, content, user=None, config=None):
     footer_cfg = appearance.get("footer", {})
     bg_cfg = appearance.get("background", {})
     
-    nav_items = ""
+    # Theme toggle is available on every page (even logged out). Icon is set by
+    # JS once the active theme is known.
+    theme_toggle = '<button type="button" id="mf-theme-btn" class="nav-btn" onclick="mfToggleTheme()" title="Toggle light/dark theme" aria-label="Toggle theme">🌙</button>'
     if user:
         is_admin = config["users"].get(user, {}).get("is_admin", False)
         nav_items = ""
         if is_admin:
             nav_items += '<a href="/admin">Admin</a>'
             nav_items += '<a href="/help" title="Help & Diagnostics" style="width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-weight:600;">?</a>'
+        nav_items += theme_toggle
         nav_items += '<a href="/logout">Logout</a>'
     else:
-        nav_items = '<a href="/login">Login</a>'
+        nav_items = theme_toggle + '<a href="/login">Login</a>'
     
     # Build logo HTML — served from /static so the (often large) image isn't
     # re-embedded into every page and can be browser-cached.
@@ -5361,13 +5531,22 @@ def render_page(title, content, user=None, config=None):
         
         footer_html = f'<footer>{footer_text}{links_html}</footer>'
     
-    # Background overlay (for image backgrounds)
+    # Background overlay (for image backgrounds; image may be file-backed or
+    # legacy inline base64 — check both).
     bg_overlay = ""
-    if bg_cfg.get("type") == "image" and bg_cfg.get("image"):
+    if bg_cfg.get("type") == "image" and (bg_cfg.get("image") or bg_cfg.get("image_file")):
         bg_overlay = '<div class="bg-overlay"></div>'
-    
+
     # Generate dynamic styles
     dynamic_styles = generate_dynamic_styles(config)
+
+    # PWA / theme values for the document head. theme-color drives the mobile
+    # browser chrome + status bar; it's updated by JS when the user toggles
+    # light/dark. Splash + theme are handled by the pre-paint script below.
+    colors = appearance.get("colors", {})
+    theme_color = colors.get("bg_secondary") or colors.get("bg_primary") or "#0a0a0b"
+    app_name = escape_html(config.get("settings", {}).get("page_title", "Multi-Frames"))
+    splash_logo = f'<img src="{logo_url}" alt="">' if logo_url else '<span style="font-size:3rem;">◈</span>'
     
     # Build browser tab title
     settings = config.get("settings", {})
@@ -5384,23 +5563,75 @@ def render_page(title, content, user=None, config=None):
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <script>
+    // Pre-paint: apply theme + decide splash before first render (no FOUC/flash)
+    (function(){{
+        try{{
+            var d=document.documentElement;
+            var t=localStorage.getItem('mf-theme');
+            if(t!=='light'&&t!=='dark'){{t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';}}
+            d.setAttribute('data-theme',t);
+            var standalone=(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||window.navigator.standalone;
+            if(sessionStorage.getItem('mf-splash')&&!standalone){{d.classList.add('no-splash');}}
+        }}catch(e){{}}
+    }})();
+    </script>
+    <meta name="theme-color" content="{theme_color}">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="{app_name}">
+    <meta name="application-name" content="{app_name}">
     <title>{full_tab_title}</title>
+    <link rel="manifest" href="/manifest.webmanifest">
     {favicon_html}
     {apple_touch_icon_html}
     {android_icon_html}
     <style>{dynamic_styles}{CSS_STYLES}</style>
 </head>
 <body>
+    <div id="app-splash"><div class="app-splash-inner">{splash_logo}<div class="status-dot loading"></div></div></div>
     {bg_overlay}
     {header_html}
     <main class="container">
         {content}
     </main>
     {footer_html}
+    <script>
+    // Splash: fade out once loaded; skip entirely on repeat same-session nav.
+    (function(){{
+        var s=document.getElementById('app-splash');
+        if(!s)return;
+        if(document.documentElement.classList.contains('no-splash')){{s.parentNode&&s.parentNode.removeChild(s);return;}}
+        function hide(){{s.classList.add('hide');try{{sessionStorage.setItem('mf-splash','1');}}catch(e){{}}
+            setTimeout(function(){{s.parentNode&&s.parentNode.removeChild(s);}},400);}}
+        window.addEventListener('load',function(){{setTimeout(hide,150);}});
+        setTimeout(hide,3000);
+    }})();
+    // Theme toggle: flip data-theme, persist, update the theme-color chrome.
+    function mfToggleTheme(){{
+        var d=document.documentElement;
+        var t=d.getAttribute('data-theme')==='light'?'dark':'light';
+        d.setAttribute('data-theme',t);
+        try{{localStorage.setItem('mf-theme',t);}}catch(e){{}}
+        mfSyncThemeButton();
+    }}
+    function mfSyncThemeButton(){{
+        var light=document.documentElement.getAttribute('data-theme')==='light';
+        var b=document.getElementById('mf-theme-btn');
+        if(b){{b.textContent=light?'☀️':'🌙';b.setAttribute('aria-label',light?'Switch to dark theme':'Switch to light theme');}}
+        var m=document.querySelector('meta[name=theme-color]');
+        if(m){{var c=getComputedStyle(document.body).getPropertyValue('--bg-secondary').trim();if(c)m.setAttribute('content',c);}}
+    }}
+    mfSyncThemeButton();
+    // Service worker for offline app-shell + faster repeat loads (skip in an
+    // embedded/tunnel iframe where it's pointless).
+    if('serviceWorker' in navigator && window.top===window.self){{
+        window.addEventListener('load',function(){{navigator.serviceWorker.register('/sw.js').catch(function(){{}});}});
+    }}
+    </script>
 </body>
 </html>"""
 
@@ -6194,8 +6425,13 @@ def render_widget(widget, config):
     name = escape_html(widget.get('name', 'Widget'))
     content = widget.get('content', '')
     size = widget.get('size', 'medium')
-    bg_color = widget.get('bg_color', '#141416')
-    text_color = widget.get('text_color', '#e8e8e8')
+    # Widget colors follow the active theme unless the admin picked a genuinely
+    # custom color. The legacy hardcoded defaults (#141416 / #e8e8e8) are
+    # treated as "use theme" so widgets switch with light/dark mode.
+    _bg = (widget.get('bg_color') or '').strip().lower()
+    _text = (widget.get('text_color') or '').strip().lower()
+    bg_color = 'var(--bg-secondary)' if _bg in ('', '#141416', '#0a0a0b', '#141416ff') else widget.get('bg_color')
+    text_color = 'var(--text-primary)' if _text in ('', '#e8e8e8', '#e8e8e8ff') else widget.get('text_color')
     border_radius = widget.get('border_radius', 8)
     
     # Size classes
@@ -6302,7 +6538,7 @@ def render_widget(widget, config):
                 <div class="weather-desc" id="{widget_id}-desc" style="font-size:0.8rem;opacity:0.8;"></div>
             </div>
         </div>
-        <div class="weather-details" id="{widget_id}-details" style="display:flex;gap:1rem;margin-top:0.5rem;font-size:0.75rem;opacity:0.7;justify-content:center;"></div>
+        <div class="weather-details" id="{widget_id}-details" style="display:flex;flex-wrap:wrap;gap:0.5rem 1rem;margin-top:0.5rem;font-size:0.75rem;opacity:0.7;justify-content:center;"></div>
         <script>
         (function() {{
             var widgetId = '{widget_id}';
@@ -6485,10 +6721,10 @@ def render_widget(widget, config):
               </div>
               <div class="st-track" id="{widget_id}-track" style="font-weight:600;text-align:center;">Loading...</div>
               <div class="st-artist" id="{widget_id}-artist" style="font-size:0.85rem;opacity:0.8;text-align:center;"></div>
-              <div class="st-controls" style="display:flex;gap:0.5rem;justify-content:center;align-items:center;margin-top:0.75rem;">
+              <div class="st-controls" style="display:flex;flex-wrap:wrap;gap:0.5rem;justify-content:center;align-items:center;margin-top:0.75rem;">
                 <button type="button" class="st-btn" id="{widget_id}-playpause" title="Play/Pause" style="cursor:pointer;font-size:1.2rem;background:none;border:none;color:inherit;">▶️</button>
                 <button type="button" class="st-btn" id="{widget_id}-skip" title="Skip" style="cursor:pointer;font-size:1.2rem;background:none;border:none;color:inherit;">⏭️</button>
-                <input type="range" id="{widget_id}-vol" min="0" max="16" value="8" title="Volume" style="width:100px;">
+                <input type="range" id="{widget_id}-vol" min="0" max="16" value="8" title="Volume" style="flex:1;min-width:120px;max-width:220px;">
               </div>
               <div class="st-error" id="{widget_id}-error" style="font-size:0.75rem;color:#ef4444;text-align:center;margin-top:0.25rem;"></div>
             </div>
@@ -6524,7 +6760,8 @@ def render_widget(widget, config):
               }}
               $('-playpause').onclick = function(){{ ctrl(String(state).toLowerCase() === 'playing' ? 'pause' : 'play'); }};
               $('-skip').onclick = function(){{ ctrl('skip'); }};
-              $('-vol').onchange = function(){{ ctrl('volume', parseInt(this.value, 10)); }};
+              var volTimer;
+              $('-vol').oninput = function(){{ var v = parseInt(this.value, 10); clearTimeout(volTimer); volTimer = setTimeout(function(){{ ctrl('volume', v); }}, 250); }};
               poll();
               setInterval(poll, 10000);
             }})();
@@ -6532,7 +6769,7 @@ def render_widget(widget, config):
             '''
     else:  # text/html
         # For text type, allow HTML
-        inner = f'<div class="widget-text">{content}</div>'
+        inner = f'<div class="widget-text" style="overflow-x:auto;">{content}</div>'
     
     return f'''
     <div class="widget {size_class}" style="background:{bg_color};color:{text_color};border-radius:{border_radius}px;">
@@ -6736,7 +6973,10 @@ def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
                 wrapper_styles.append(f"height:{height}px")
                 wrapper_styles.append("overflow:hidden")
             else:
-                iframe_styles.append(f"height:{height}px")
+                # Expose the configured height as a CSS var (not an inline
+                # `height`) so the stylesheet can cap it to the viewport on
+                # phones while desktop keeps the exact pixel height.
+                iframe_styles.append(f"--frame-h:{height}px")
                 iframe_styles.append("width:100%")
             
             card_style_str = ';'.join(card_styles) if card_styles else ''
@@ -6822,7 +7062,7 @@ def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
                     iframe_inner = f'<iframe id="iframe-{iframe_id}" src="{iframe_url}" style="{iframe_style_str}" loading="lazy" {sandbox_attr}{fb_attr}></iframe>'
 
             # Fallback placeholder (hidden by default)
-            fallback_div = f'<div id="fallback-{iframe_id}" class="iframe-fallback" style="display:none;height:{height}px;">{fallback_content_html}</div>'
+            fallback_div = f'<div id="fallback-{iframe_id}" class="iframe-fallback" style="display:none;--frame-h:{height}px;">{fallback_content_html}</div>'
             
             iframe_html += f"""
             <div class="iframe-card" style="{card_style_str}">
@@ -6956,8 +7196,8 @@ def render_main_page(user, config, client_ip=None, force_iframe_proxy=False):
     <style>
     .fullscreen-btn {
         position: fixed;
-        bottom: 1rem;
-        right: 1rem;
+        bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+        right: calc(1rem + env(safe-area-inset-right, 0px));
         background: var(--bg-secondary);
         border: 1px solid var(--border);
         color: var(--text-primary);
@@ -10812,6 +11052,26 @@ class IFrameHandler(http.server.BaseHTTPRequestHandler):
                 'version': VERSION,
                 'uptime_seconds': uptime,
             })
+
+        elif path == '/manifest.webmanifest':
+            # PWA manifest (public) — makes the dashboard installable.
+            body = json.dumps(build_manifest(config)).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/manifest+json')
+            self.send_header('Cache-Control', 'public, max-age=3600')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self._write_body(body)
+
+        elif path == '/sw.js':
+            # Service worker (public). Served from the origin root so its scope
+            # can cover the whole app. Revalidated each load so updates land.
+            body = service_worker_js().encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+            self.send_header('Service-Worker-Allowed', '/')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self._write_body(body)
 
         elif path == '/forgot-password':
             if user:

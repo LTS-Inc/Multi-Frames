@@ -282,6 +282,38 @@ class ServerIntegrationTests(unittest.TestCase):
         self.assertTrue(data.get("version"))
         self.assertIn("uptime_seconds", data)
 
+    def test_manifest_public_and_valid(self):
+        import json
+        resp = self._get("/manifest.webmanifest")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.headers.get("Content-Type"), "application/manifest+json")
+        m = json.loads(resp.read())
+        self.assertTrue(m.get("name"))
+        self.assertEqual(m.get("start_url"), "/")
+        self.assertEqual(m.get("display"), "standalone")
+        self.assertTrue(m.get("icons"))  # always at least the fallback icon
+
+    def test_service_worker_public_and_versioned(self):
+        resp = self._get("/sw.js")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("javascript", resp.headers.get("Content-Type", ""))
+        self.assertEqual(resp.headers.get("Service-Worker-Allowed"), "/")
+        body = resp.read().decode("utf-8")
+        self.assertIn("mf-" + self.mf.VERSION, body)   # cache name is version-stamped
+        self.assertIn("addEventListener('fetch'", body)
+
+    def test_page_head_has_pwa_and_theme(self):
+        # Login page (public) carries the full PWA/theme head.
+        html = self._get("/login").read().decode("utf-8")
+        for needle in ('rel="manifest"', 'name="theme-color"',
+                       "viewport-fit=cover", 'name="mobile-web-app-capable"',
+                       'id="app-splash"', "mfToggleTheme", "serviceWorker"):
+            self.assertIn(needle, html, needle)
+
+    def test_light_theme_in_css(self):
+        html = self._get("/login").read().decode("utf-8")
+        self.assertIn('[data-theme="light"]', html)
+
     def test_response_gzipped_when_accepted(self):
         import gzip as _gzip
         login = self._post_form("/login", {"username": "admin", "password": "admin123"})

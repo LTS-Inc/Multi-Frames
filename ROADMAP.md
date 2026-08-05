@@ -231,6 +231,20 @@ Full read-modify-write atomicity of the server `config` across concurrent handle
 - ⏹️ **Drag-and-drop reordering** — deliberately NOT added; ▲/▼ move buttons kept (product decision). Docs corrected in v1.5.1.
 - ⏳ Not done (future): SSE real-time widget updates; widget marketplace/template library; Prometheus-style metrics.
 
+### Phase 5 — Mobile / PWA — ✅ DONE (v1.8.0)
+Decision: stay on the vanilla single-file stack — **no Next.js / npm / build step**
+(a framework would break the Pi/kiosk deploy model; the cloud portal already
+proved PWA is the right pattern). All in `render_page` head + two new routes +
+CSS, no new dependencies.
+- ✅ **Installable PWA**: `/manifest.webmanifest` + `theme-color` + `mobile-web-app-capable` + `viewport-fit=cover` + icon wiring.
+- ✅ **Offline service worker** (`/sw.js`), auth-safe (cache-first only for hashed `/static`; network-first navigations; never caches `/api`/`/proxy`/auth).
+- ✅ **Light/dark theme toggle** (device-default + manual, no-FOUC pre-paint, widgets follow theme).
+- ✅ **Launch splash / loading screen** (once per session / standalone).
+- ✅ **Responsive fixes**: iframe height cap (`--frame-h`/75vh), full-width frames, landscape ≤2 widget cols, 44px touch targets, styled range/volume sliders (live), scrollable admin tables, URL ellipsis, safe-area fullscreen button.
+- ✅ **Cleanup**: wired the orphaned iframe-gap/content-padding settings; removed dead CSS; fixed the file-backed image-background regression.
+- Verified with a headless Playwright pass at 375×812 (no horizontal overflow, height cap, theme persistence, SW registration, landscape columns) + the stdlib suite (77 tests).
+- ⏳ Not done (future): `apple-touch-startup-image` per device size; push notifications; a settings toggle to force a theme fleet-wide.
+
 ### Testing to add alongside
 - Regression tests for U-1 (permission-filtered proxy index), N-1 (send-command host restriction), N-4 (tunnel admin selection), C-1 (worker signature verification), U-5 (log tab ordering), U-6 (notes newlines).
 - A worker unit harness (currently only `node --check` + route parity) covering `verifyToken`, tunnel ownership, and the metrics averaging math.
